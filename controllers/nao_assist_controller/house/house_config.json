@@ -1,0 +1,74 @@
+{
+  "targets": [
+    {
+      "id": "kitchen",
+      "def": "FLOOR_KITCHEN",
+      "label": "Kitchen",
+      "route_doors": ["door_hall_kitchen"]
+    },
+    {
+      "id": "living_room",
+      "def": "FLOOR_LIVING_ROOM",
+      "label": "Living Room",
+      "route_doors": ["door_hall_living"]
+    },
+    {
+      "id": "sofa",
+      "def": "SOFA_MAIN",
+      "label": "Sofa",
+      "route_doors": ["door_hall_living"]
+    },
+    {
+      "id": "bedroom",
+      "def": "FLOOR_BEDROOM",
+      "label": "Bedroom",
+      "route_doors": ["door_hall_bedroom"]
+    },
+    {
+      "id": "bathroom",
+      "def": "FLOOR_BATHROOM",
+      "label": "Bathroom",
+      "route_doors": ["door_hall_bathroom"]
+    }
+  ],
+  "doors": [
+    {
+      "id": "door_hall_kitchen",
+      "label": "kitchen",
+      "hinge_def": "DOOR_KITCHEN_HINGE",
+      "open_angle_rad": -1.70,
+      "close_angle_rad": 0.0,
+      "approach_def": "DOOR_FRAME_KITCHEN"
+    },
+    {
+      "id": "door_hall_bedroom",
+      "label": "bedroom",
+      "hinge_def": "DOOR_BEDROOM_HINGE",
+      "open_angle_rad": -1.70,
+      "close_angle_rad": 0.0,
+      "approach_def": "DOOR_FRAME_BEDROOM"
+    },
+    {
+      "id": "door_hall_bathroom",
+      "label": "bathroom",
+      "hinge_def": "DOOR_BATHROOM_HINGE",
+      "open_angle_rad": 1.70,
+      "close_angle_rad": 0.0,
+      "approach_def": "DOOR_FRAME_BATHROOM"
+    },
+    {
+      "id": "door_hall_living",
+      "label": "living room",
+      "hinge_def": "DOOR_LIVING_HINGE",
+      "open_angle_rad": 1.65,
+      "close_angle_rad": 0.0,
+      "approach_def": "DOOR_FRAME_LIVING"
+    }
+  ],
+  "arrive_distance_m": 0.6,
+  "door_arrive_distance_m": 1.0,
+  "timeout_s": 90,
+  "rotation_tolerance_rad": 0.15,
+  "step_duration_s": 0.8,
+  "door_wait_time_s": 1.5
+}

@@ -1,0 +1,173 @@
+{
+  "description": "HIERARCHICAL NAVIGATION CONFIG — Static room topology and door information for Dijkstra-based path planning",
+  "comment": "Fully-known environment with actual room centers, entry points (doors) from Webots world, and hallway costs. This file defines the graph structure used by the 3-layer hierarchical planner.",
+  "world_source": "worlds/My project.wbt",
+  
+  "================== WHAT THIS FILE DOES ==================": "This JSON file contains the complete house topology used for hierarchical path planning. Instead of using A* grid search over thousands of cells, the hierarchical system plans at the room level using Dijkstra's algorithm on a small graph of ~5 rooms, then generates waypoints for each room transition.",
+  
+  "================== STRUCTURE OVERVIEW ==================": {
+    "rooms": "Dictionary of all rooms in the house. Each room has: center (room's central point), entry_points (list of doors where robot can enter/exit), bounds (axis-aligned box around room), type (hallway/room), size (dimensions)",
+    "hallways": "List of [room_A, room_B, cost] connections. Cost represents traversal difficulty (higher = prefer alternative routes). All hallways currently cost 1.5 (uniform - could be optimized for obstacles/furniture)"
+  },
+  
+  "================== HOW IT'S USED ==================": {
+    "LOADED_BY": [
+      "nav_agent_v2.py: __init__() loads this file at startup from: controllers/nao_assist_controller/house/hierarchical_config.json",
+      "hierarchical_planner.py: HierarchicalPlanner.load_house_config() parses the rooms and hallways into graph structures"
+    ],
+    "PLANNING_FLOW": [
+      "1. go_to_target() in go_to_target.py calls NavAgent.navigate_to(target_name)",
+      "2. NavAgent (nav_agent_v2.py) calls HierarchicalPlanner.plan(start_xy, goal_room)",
+      "3. Planner Layer 1: TopologicalGraph.dijkstra() finds room-level path using hallway costs",
+      "4. Planner Layer 2: RoomPathPlanner.plan_room_sequence() generates waypoints by connecting entry points",
+      "5. WaypointController.execute() moves robot along waypoints with sonar avoidance"
+    ],
+    "CALL_CHAIN_DETAILED": {
+      "File": "go_to_target.py:go_to_target()",
+      "Calls": "NavAgent.__init__() [from nav_agent_v2.py]",
+      "Which_Loads": "hierarchical_config.json from: nao_assist_controller/house/",
+      "Which_Parses_Into": "HierarchicalPlanner object in nav_agent_v2.py",
+      "Which_Uses": "entry_points to generate waypoints between rooms"
+    }
+  },
+  
+  "================== ROOM STRUCTURE REFERENCE ==================": {
+    "ROOMS": {
+      "center": "[x, y] — Central point of room used as waypoint in hierarchical planning. Example: corridor center is [-0.36, -0.32]",
+      "entry_points": "[[x1, y1], [x2, y2], ...] — Doors where robot transitions between this room and adjacent rooms. Multiple entry_points allow flexible entrance/exit angles. Example: kitchen has 2 entry points on its shared wall with corridor: [[1.84, 1.40], [1.84, 0.40]]",
+      "bounds": "[x_min, x_max, y_min, y_max] — Axis-aligned bounding box of room. Used for line-of-sight checks and boundary validation when generating waypoints",
+      "type": "hallway | room — Type descriptor (currently informational, not used by planner)",
+      "size": "[width, height] — Room dimensions in meters",
+      "door_frame": "ID reference to door frame in Webots world (used by doorway_detector.py for alignment)"
+    }
+  },
+  
+  "================== HALLWAYS ARRAY REFERENCE ==================": {
+    "FORMAT": "[[room_A, room_B, cost], ...]",
+    "COST_MEANING": "Dijkstra distance metric for traversing this hallway. Currently all costs are 1.5 (uniform). Could be optimized: increase cost for narrow/cluttered paths, decrease for open paths",
+    "EXAMPLE": "['corridor', 'kitchen', 1.5] means: corridor ↔ kitchen hallway costs 1.5 units to traverse",
+    "ALL_HALLWAYS_CONNECT_TO_CORRIDOR": "In this house, all rooms connect to the central corridor. Hallway costs determine which path Dijkstra prefers if multiple routes exist"
+  },
+  
+  "================== ENTRY_POINTS EXPLAINED ==================": {
+    "PURPOSE": "Entry points are coordinates where the robot physically transitions between rooms. They represent doorways/passages.",
+    "WHY_MULTIPLE": "A room may have multiple doors on the same wall. Entry points allow flexible entry angles. Example: kitchen has 2 entry points vertically spaced (y=1.40 and y=0.40), allowing robot to enter from different positions",
+    "HOW_THEY_RE_USED": [
+      "1. RoomPathPlanner finds nearest entry point to robot's current position",
+      "2. Generates waypoint at entry point to transition between rooms",
+      "3. WaypointController moves robot toward these waypoint entry points",
+      "4. NavAgent._PlannerAdapter maps world coordinates to nearest room by checking which entry point is closest"
+    ],
+    "GEOMETRY": "Entry points should align with actual door/passage locations in Webots world (extracted from world geometry when file was created)"
+  },
+  
+  "================== ROOM_TARGETS SECTION ==================": {
+    "PURPOSE": "Maps room IDs to human-readable labels and room properties",
+    "LABEL": "Human name displayed in logs and speech (e.g., 'Kitchen' in voice commands)",
+    "FURNITURE": "List of furniture items in room (informational, used by ObjectClassifier for semantic planning)",
+    "DOORS": "List of door IDs that provide access to this room (used for routing/blocking analysis)"
+  },
+  
+  "================== DATA FLOW DIAGRAM ==================": [
+    "USER VOICE COMMAND: 'Go to kitchen'",
+    "           ↓",
+    "    go_to_target.py:go_to_target()",
+    "           ↓",
+    "    NavAgent.__init__() loads hierarchical_config.json",
+    "           ↓",
+    "    HierarchicalPlanner.load_house_config() parses rooms/hallways",
+    "           ↓",
+    "    Layer 1 Dijkstra: corridor → kitchen (room_path = ['corridor', 'kitchen'])",
+    "           ↓",
+    "    Layer 2 Waypoints: Extract entry_points, center coords",
+    "           ↓",
+    "    Layer 3 Execute: WaypointController.execute(waypoints)",
+    "           ↓",
+    "    ROBOT MOVES along waypoints, avoiding obstacles with sonar"
+  ],
+  
+  "================== IMPORTANT NOTES ==================": {
+    "ENTRY_POINTS_ARE_CRITICAL": "Planner cannot generate valid paths without entry_points. If entry_points are wrong, robot will aim for incorrect waypoints and may hit walls",
+    "ALL_HALLWAY_COSTS_UNIFORM": "Current design has all hallway costs = 1.5. This means Dijkstra treats all room-to-room transitions equally. Could optimize by: increasing cost for narrow hallways, decreasing for wide open areas",
+    "ROOM_CENTERS_SHOULD_BE_OPEN": "Room centers should be inside the room, not near walls. Used as intermediate waypoint.",
+    "BOUNDS_USED_FOR_LOS_CHECKS": "RoomPathPlanner may use bounds for line-of-sight validation (though currently just uses straight-line waypoints)",
+    "NO_DYNAMIC_UPDATES": "This config is static (loaded once at startup). Dynamic obstacles are handled by WaypointController's reactive avoidance, not by replanning with new config",
+    "EXTRACTED_FROM_WEBOTS": "These values were extracted from worlds/My project.wbt. If world geometry changes, this file should be regenerated"
+  },
+  
+  "rooms": {
+    "corridor": {
+      "center": [-0.36, -0.32],
+      "entry_points": [[0.5, -0.32], [-1.5, -0.32], [1.84, 0.88], [1.84, -1.52], [-2.36, 0.88], [-2.36, -1.52]],
+      "bounds": [-4.71, 3.99, -1.27, 0.63],
+      "type": "hallway",
+      "size": [9.4, 2.3]
+    },
+    
+    "kitchen": {
+      "center": [1.99, 2.63],
+      "entry_points": [[1.84, 1.40], [1.84, 0.40]],
+      "bounds": [0.93, 3.05, 1.40, 3.85],
+      "type": "room",
+      "size": [4.6, 3.4],
+      "door_frame": "door_frame_kitchen"
+    },
+    
+    "living_room": {
+      "center": [-2.71, 2.63],
+      "entry_points": [[-2.36, 1.40], [-2.36, 0.40]],
+      "bounds": [-4.47, -1.00, 1.40, 3.85],
+      "type": "room",
+      "size": [4.6, 3.4],
+      "door_frame": "door_frame_living"
+    },
+    
+    "bedroom": {
+      "center": [-2.71, -3.27],
+      "entry_points": [[-2.36, -2.00], [-2.36, -1.00]],
+      "bounds": [-4.47, -1.00, -4.47, -1.77],
+      "type": "room",
+      "size": [4.6, 3.4],
+      "door_frame": "door_frame_bedroom"
+    },
+    
+    "bathroom": {
+      "center": [1.99, -3.27],
+      "entry_points": [[1.84, -2.00], [1.84, -1.00]],
+      "bounds": [0.93, 3.05, -4.47, -1.77],
+      "type": "room",
+      "size": [4.6, 3.4],
+      "door_frame": "door_frame_bathroom"
+    }
+  },
+  
+  "hallways": [
+    ["corridor", "kitchen", 1.5],
+    ["corridor", "living_room", 1.5],
+    ["corridor", "bedroom", 1.5],
+    ["corridor", "bathroom", 1.5]
+  ],
+  
+  "room_targets": {
+    "kitchen": {
+      "label": "Kitchen",
+      "furniture": ["counter", "table"],
+      "doors": ["door_hall_kitchen"]
+    },
+    "living_room": {
+      "label": "Living Room",
+      "furniture": ["sofa", "tv"],
+      "doors": ["door_hall_living"]
+    },
+    "bedroom": {
+      "label": "Bedroom",
+      "furniture": ["bed"],
+      "doors": ["door_hall_bedroom"]
+    },
+    "bathroom": {
+      "label": "Bathroom",
+      "furniture": ["toilet"],
+      "doors": ["door_hall_bathroom"]
+    }
+  }
+}

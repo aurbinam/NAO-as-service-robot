@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__plugin_claude-mem_mcp-search__smart_outline",
+      "mcp__plugin_claude-mem_mcp-search__get_observations",
+      "mcp__plugin_serena_serena__activate_project",
+      "mcp__plugin_serena_serena__replace_content",
+      "mcp__plugin_serena_serena__read_file",
+      "mcp__plugin_serena_serena__find_symbol",
+      "mcp__plugin_serena_serena__find_file",
+      "mcp__plugin_serena_serena__search_for_pattern",
+      "mcp__plugin_serena_serena__insert_after_symbol",
+      "mcp__plugin_serena_serena__create_text_file",
+      "mcp__plugin_serena_serena__get_symbols_overview",
+      "Bash(wc *)",
+      "Bash(tail *)",
+      "Bash(grep -n \"^]$\" \"C:\\\\\\\\Users\\\\\\\\adaau\\\\\\\\Documents\\\\\\\\College\\\\\\\\3º year\\\\\\\\NAO-as-service-robot\\\\\\\\worlds\\\\\\\\My project.wbt\")",
+      "Bash(grep *)",
+      "Bash(sed *)"
+    ]
+  }
+}
