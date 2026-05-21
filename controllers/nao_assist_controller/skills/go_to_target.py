@@ -1,4 +1,4 @@
-﻿"""
+"""
 GO_TO_TARGET Skill - Navigate to a static target location.
 Iteration 3: Grid-planned obstacle-aware navigation via executor layer.
 
@@ -79,7 +79,7 @@ CAUTION_DISTANCE = 0.60          # slow zone: shorter bursts
 HUMAN_SAFE_ARRIVE_M = 0.70       # default arrive dist for person targets
 HUMAN_SLOW_ZONE_M = 1.50         # cautious approach begins here
 BURST_STEPS_NORMAL = 7           # ~0.22s per burst at 32ms
-BURST_STEPS_CAUTION = 3          # ~0.10s per burst in caution zone
+BURST_STEPS_CAUTION = 6          # ~0.10s per burst in caution zone
 SAFE_CLEAR_DISTANCE = 0.40       # exit AVOIDING when max sonar exceeds this (hallway width ~2.4m)
 AVOIDANCE_TURN_STEPS = 18        # partial turn â‰ˆ 8Â° (18/89 Ã— 39Â° at 32ms/step)
 AVOIDANCE_FWD_STEPS = 4          # short forward burst â‰ˆ 0.13s during arc escape
@@ -1131,7 +1131,18 @@ class NavigationController:
                         else:
                             _no_progress_count = 0
                         if _no_progress_count >= 12:
-                            print(f"{LOG_PREFIX} No progress ({_no_progress_count} cycles) â†’ ALIGNING")
+                            # Fix B: heading-good no-progress -> bigger forward
+                            # burst, not another alignment turn. Alignment turn
+                            # just adds lateral drift when we are already pointed
+                            # at the target. Push harder forward instead.
+                            if abs(heading_error) < math.radians(5.0):
+                                print(f"{LOG_PREFIX} No progress but heading good ({math.degrees(heading_error):.1f}deg) - bigger forward burst")
+                                _no_progress_count = 0
+                                _fr = self._reactive_forward_burst(burst_steps=BURST_STEPS_NORMAL)
+                                if _fr == "SIM_END":
+                                    return False
+                                continue
+                            print(f"{LOG_PREFIX} No progress ({_no_progress_count} cycles) -> ALIGNING")
                             _no_progress_count = 0
                             # Force a small turn burst even for small heading errors
                             turn_motion = self._motion_turn_left if heading_error > 0 else self._motion_turn_right

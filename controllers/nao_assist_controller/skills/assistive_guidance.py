@@ -84,8 +84,8 @@ def execute_assistive_guidance(
         f"Please follow me."
     )
 
-    # 3. Signal Grandpa: start walking
-    _send_signal(emitter, "start_walk")
+    # 3. Signal Grandpa: follow NAO (assisted mode)
+    _send_signal(emitter, "assist")
 
     # 4. Navigate to destination (brain handles doors + replanning)
     route_doors = _get_route_doors(brain, destination)

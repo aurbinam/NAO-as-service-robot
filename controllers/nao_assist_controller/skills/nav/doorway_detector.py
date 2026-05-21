@@ -197,6 +197,35 @@ class DoorwayDetector:
     # Alignment helpers
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Geometric helpers: door centre + posts derived from _DOOR_FRAME_DATA.
+    # Use these instead of "frame DEF translation" so callers don't conflate
+    # a particular DEF placement with the actual geometric centre.
+    # ------------------------------------------------------------------
+
+    def door_center(self, door_id: str) -> Optional[Tuple[float, float]]:
+        """Geometric midpoint of the two posts (world XY, metres)."""
+        entry = _DOOR_FRAME_DATA.get(door_id)
+        if entry is None:
+            return None
+        cx, cy, _wall_y, _half = entry
+        return (cx, cy)
+
+    def door_posts(self, door_id: str) -> Optional[Tuple[Tuple[float, float], Tuple[float, float]]]:
+        """Return (west_post, east_post) world XY positions of the door posts."""
+        entry = _DOOR_FRAME_DATA.get(door_id)
+        if entry is None:
+            return None
+        cx, cy, _wall_y, half = entry
+        return ((cx - half, cy), (cx + half, cy))
+
+    def door_gap_width(self, door_id: str) -> Optional[float]:
+        """Inner clear width of the opening (metres) = 2 * inner_half_gap."""
+        entry = _DOOR_FRAME_DATA.get(door_id)
+        if entry is None:
+            return None
+        return 2.0 * entry[3]
+
     def compute_approach_heading(self, door_id: str) -> Optional[float]:
         """
         Perpendicular approach heading for a door (radians, world frame).

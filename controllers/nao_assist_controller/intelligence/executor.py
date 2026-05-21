@@ -1,4 +1,4 @@
-﻿import math
+import math
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
@@ -45,41 +45,51 @@ class Executor:
     LIVING_DOOR_ID  = "door_hall_living"
     KITCHEN_DOOR_ID = "door_hall_kitchen"
     # Default geometry tuning for standard doorway crossing.
-    DOOR_LINEUP_OFFSET_M = 0.45
-    DOOR_LINEUP_ARRIVE_M = 0.35
-    DOOR_ENTRY_OFFSET_M = 0.95
-    DOOR_ENTRY_LATERAL_M = 0.08
-    DOOR_ENTRY_ARRIVE_M = 0.40
-    # Keep a consistent hallway standoff across all doors (matches kitchen behavior).
-    DOOR_HALLWAY_STANDOFF_M = 0.65
+    # =====================================================================
+    # UNIVERSAL DOOR INTERACTION GEOMETRY
+    # =====================================================================
+    # ONE model for every door (kitchen, bedroom, bathroom, living room).
+    # No per-room tuning. Symbols:
+    #   approach point = door_centre - normal * APPROACH_OFFSET (hallway side)
+    #   entry point    = door_centre + normal * ENTRY_OFFSET    (room side)
+    # where "normal" is the unit vector pointing from hallway into the room.
+    DOOR_APPROACH_OFFSET_M = 0.30   # arm-reach (handle reach) - NAO stops this close to door plane
+    DOOR_APPROACH_ARRIVE_M = 0.20   # stop within 20 cm of approach point
+    DOOR_ENTRY_OFFSET_M    = 0.80   # walk this far past the door into the room
+    DOOR_ENTRY_ARRIVE_M    = 0.30
+    DOOR_HALLWAY_STANDOFF_M = DOOR_APPROACH_OFFSET_M
 
-    # Bedroom-specific doorway tuning (kitchen profile already works):
-    # - Keep centerline crossing (no lateral bias)
-    # - Push farther inside before turning toward room center
-    # - Use tighter lineup arrival for better pre-cross alignment
-    BEDROOM_LINEUP_OFFSET_M = 0.55
-    BEDROOM_LINEUP_ARRIVE_M = 0.30
-    BEDROOM_PREAPPROACH_OFFSET_M = 0.95
-    BEDROOM_PREAPPROACH_ARRIVE_M = 0.45
-    BEDROOM_APPROACH_ARRIVE_M = 0.60
-    BEDROOM_ENTRY_OFFSET_M = 1.15
-    BEDROOM_ENTRY_LATERAL_M = 0.00
-    BEDROOM_ENTRY_ARRIVE_M = 0.35
+    DOOR_LINEUP_OFFSET_M = DOOR_APPROACH_OFFSET_M
+    DOOR_LINEUP_ARRIVE_M = DOOR_APPROACH_ARRIVE_M
+    DOOR_ENTRY_LATERAL_M = 0.0
 
-    # Bathroom: narrow doorway requires tighter alignment and slower approach
-    # - Reduce entry offset to prevent aggressive forward motion into confined space
-    # - Tighten lineup arrival to force better centerline alignment before crossing
-    # - Add heading tolerance gate: prevents entry unless heading within tolerance
-    # - Add clearance minimum to prevent wall collision
-    BATHROOM_LINEUP_OFFSET_M = 1.0
-    BATHROOM_LINEUP_ARRIVE_M = 0.20      # was 0.30 - tighter alignment
-    BATHROOM_ENTRY_OFFSET_M = 1.00       # was 1.20 - less aggressive entry
-    BATHROOM_ENTRY_LATERAL_M = 0.00
-    BATHROOM_ENTRY_ARRIVE_M = 0.35       # was 0.32
-    BATHROOM_APPROACH_ARRIVE_M = 0.75
-    BATHROOM_STABILIZE_S = 0.35
-    BATHROOM_HEADING_TOLERANCE_DEG = 8.0   # must align within 8Â° before entry
-    BATHROOM_CLEARANCE_MIN_M = 0.35       # abort if clearance < 0.35m
+    # Per-room aliases collapsed to the universal values. Names are retained
+    # because they are referenced in a few helper checks, but the values
+    # are intentionally identical. Cross-doorway no longer branches on door_id.
+    BEDROOM_LINEUP_OFFSET_M = DOOR_LINEUP_OFFSET_M
+    BEDROOM_LINEUP_ARRIVE_M = DOOR_LINEUP_ARRIVE_M
+    BEDROOM_ENTRY_OFFSET_M  = DOOR_ENTRY_OFFSET_M
+    BEDROOM_ENTRY_LATERAL_M = DOOR_ENTRY_LATERAL_M
+    BEDROOM_ENTRY_ARRIVE_M  = DOOR_ENTRY_ARRIVE_M
+    BEDROOM_PREAPPROACH_OFFSET_M = DOOR_APPROACH_OFFSET_M
+    BEDROOM_PREAPPROACH_ARRIVE_M = DOOR_APPROACH_ARRIVE_M
+    BEDROOM_APPROACH_ARRIVE_M    = DOOR_APPROACH_ARRIVE_M
+
+    BATHROOM_LINEUP_OFFSET_M = DOOR_LINEUP_OFFSET_M
+    BATHROOM_LINEUP_ARRIVE_M = DOOR_LINEUP_ARRIVE_M
+    BATHROOM_ENTRY_OFFSET_M  = DOOR_ENTRY_OFFSET_M
+    BATHROOM_ENTRY_LATERAL_M = DOOR_ENTRY_LATERAL_M
+    BATHROOM_ENTRY_ARRIVE_M  = DOOR_ENTRY_ARRIVE_M
+    BATHROOM_APPROACH_ARRIVE_M  = DOOR_APPROACH_ARRIVE_M
+    BATHROOM_STABILIZE_S        = 0.35
+    BATHROOM_HEADING_TOLERANCE_DEG = 12.0
+    BATHROOM_CLEARANCE_MIN_M    = 0.30
+
+    LIVING_LINEUP_OFFSET_M = DOOR_LINEUP_OFFSET_M
+    LIVING_LINEUP_ARRIVE_M = DOOR_LINEUP_ARRIVE_M
+    LIVING_ENTRY_OFFSET_M  = DOOR_ENTRY_OFFSET_M
+    LIVING_ENTRY_LATERAL_M = DOOR_ENTRY_LATERAL_M
+    LIVING_ENTRY_ARRIVE_M  = DOOR_ENTRY_ARRIVE_M
 
     def __init__(self, robot, house_config, say_func):
         # Store runtime dependencies injected by the controller layer.
@@ -229,7 +239,7 @@ class Executor:
 
         try:
             ok = self._guarded_navigate_to_point(
-                approach_tx, approach_ty, arrive_dist=0.45,
+                approach_tx, approach_ty, arrive_dist=0.20,  # tightened - stop closer to approach
                 phase=f"approach:{door_id}",
                 goal_id=door_id,
             )
@@ -240,6 +250,23 @@ class Executor:
                     print(f"{LOG_PREFIX} [STEP 1]   Final robot position: ({pos_final[0]:.2f}, {pos_final[1]:.2f})")
                     print(f"{LOG_PREFIX} [STEP 1]   Distance to target: {self._dist2d(pos_final, (approach_tx, approach_ty)):.3f}m")
                     print(f"{LOG_PREFIX} [STEP 1] Status: SUCCESS\n")
+                    try:
+                        nav_fa = self._get_nav_controller()
+                        yaw_fa = nav_fa.get_current_heading()
+                        normal_fa = nav_fa._doorway_detector.compute_approach_heading(door_id)
+                        lateral = pos_final[0] - ax
+                        normal_off = abs(pos_final[1] - ay)
+                        dist_centre = math.hypot(pos_final[0] - ax, pos_final[1] - ay)
+                        yaw_str = f"{math.degrees(yaw_fa):+.1f}deg" if yaw_fa is not None else "n/a"
+                        normal_deg = math.degrees(normal_fa) if normal_fa is not None else 0.0
+                        print(f"{LOG_PREFIX} [FINAL_APPROACH] door={door_id} "
+                              f"target_pose=({approach_tx:.2f},{approach_ty:.2f},{normal_deg:+.0f}deg) "
+                              f"robot_pose=({pos_final[0]:.2f},{pos_final[1]:.2f},{yaw_str}) "
+                              f"distance_to_center={dist_centre:.3f}m "
+                              f"lateral_offset={lateral:+.3f}m "
+                              f"normal_offset={normal_off:.3f}m")
+                    except Exception as _exc:
+                        print(f"{LOG_PREFIX} [FINAL_APPROACH] log exception: {_exc}")
                 return ExecutionResult("success")
             print(f"{LOG_PREFIX} [STEP 1] ✗ Navigation returned False")
             print(f"{LOG_PREFIX} [STEP 1] → Attempting straight-line burst fallback...")
@@ -304,8 +331,8 @@ class Executor:
 
             print(f"{LOG_PREFIX} verify attempt {attempt}/{max_corrections}: "
                   f"dist={dist:.3f}m  angle_err={angle_error_deg:.1f}deg  "
-                f"envelope=[{safety_min:.2f}, {safety_max:.2f}]m  "
-                f"standoff={self.DOOR_HALLWAY_STANDOFF_M:.2f}m")
+                  f"envelope=[{safety_min:.2f}, {safety_max:.2f}]m  "
+                  f"standoff={self.DOOR_HALLWAY_STANDOFF_M:.2f}m")
 
             # Small tolerance band allows the robot to pass without over-correcting for tiny pose noise.
             _EPSILON = 0.15
@@ -353,39 +380,87 @@ class Executor:
         )
 
     def _open_door(self, door_id: str) -> ExecutionResult:
+        """
+        Universal open-door step.
+
+        Preconditions: verify_safe_approach has already placed NAO inside
+        DOOR_INTERACTION_MAX of the door approach point. We do NOT iterate a
+        secondary close-walk here -- that wedged NAO into the door frame.
+
+        Behaviour:
+          1. Rotate to door normal (only if heading drift > 15 deg).
+          2. Open the door.
+
+        The cross_doorway step that follows will walk straight forward through
+        the doorway using the heading we left here.
+        """
         try:
-            # Ensure NAO is close to the door frame before opening for realism.
             approach_pos = self._house.get_door_approach_position(door_id)
             if approach_pos is not None:
                 ax, ay = approach_pos[0], approach_pos[1]
-                close_point = self._hallway_side_point((ax, ay), offset_m=0.12)
                 pos = self._robot_pos_2d()
-                if close_point is not None and pos is not None:
-                    dist_to_close = self._dist2d(pos, close_point)
-                    print(f"{LOG_PREFIX} open_door: pre-approach close_point=({close_point[0]:.2f}, {close_point[1]:.2f}) dist={dist_to_close:.3f}m")
-                    if dist_to_close > 0.15:
-                        print(f"{LOG_PREFIX} open_door: moving closer before opening")
-                        # Use short, smooth bursts to avoid oscillation near the frame.
-                        self._straight_line_approach(
-                            close_point[0], close_point[1],
-                            arrive_dist=0.10,
-                            burst_steps=6,
-                            max_bursts=30,
-                        )
-                    pos = self._robot_pos_2d()
-                    if pos is not None:
-                        dist_to_close = self._dist2d(pos, close_point)
-                        print(f"{LOG_PREFIX} open_door: final_dist_to_close={dist_to_close:.3f}m")
-                        if dist_to_close > 0.25:
-                            print(f"{LOG_PREFIX} open_door: still too far to open safely")
-                            return ExecutionResult("failed", reason="door_too_far",
-                                                   details={"door": door_id, "dist": round(dist_to_close, 3)})
-                    nav = self._get_nav_controller()
-                    nav.rotate_toward_target((ax, ay, 0.0))
+                nav = self._get_nav_controller()
+                current_heading = nav.get_current_heading()
 
-            # Import the door skill only when it is actually needed.
+                # Door geometry probe -- universal across all rooms.
+                try:
+                    posts = nav._doorway_detector.door_posts(door_id)
+                except Exception:
+                    posts = None
+                normal = None
+                try:
+                    normal = nav._doorway_detector.compute_approach_heading(door_id)
+                except Exception:
+                    pass
+
+                # Compute structured alignment metrics.
+                door_centre = (ax, ay)
+                dist_to_door = self._dist2d(pos, door_centre) if pos is not None else float('nan')
+                # Lateral offset = perpendicular distance from doorway centreline.
+                # The doorway centreline is the door normal axis through door_centre,
+                # so lateral offset is the component perpendicular to that axis.
+                # For north/south wall doors the door normal is along +/- y, so the
+                # perpendicular component is simply (robot_x - door_x).
+                lateral = (pos[0] - ax) if pos is not None else float('nan')
+                heading_err_deg = float('nan')
+                if normal is not None and current_heading is not None:
+                    err = math.atan2(
+                        math.sin(normal - current_heading),
+                        math.cos(normal - current_heading),
+                    )
+                    heading_err_deg = math.degrees(err)
+                # Wall clearance: distance from each post in the body-y direction.
+                clear_left = clear_right = float('nan')
+                if posts is not None and pos is not None:
+                    west_post, east_post = posts
+                    # NAO body half-width (shoulder/2) is 0.15 m.
+                    half_width = 0.15
+                    clear_west = abs(pos[0] - west_post[0]) - half_width
+                    clear_east = abs(pos[0] - east_post[0]) - half_width
+                    # left/right depend on facing; logged as west/east here.
+                    clear_left = clear_west
+                    clear_right = clear_east
+
+                print(f"{LOG_PREFIX} [DOOR_ALIGN] door={door_id} centre=({ax:.2f}, {ay:.2f}) "
+                      f"robot={pos and f'({pos[0]:.2f}, {pos[1]:.2f})'} "
+                      f"lateral={lateral:+.3f}m heading_err={heading_err_deg:+.1f}deg "
+                      f"distance_to_door={dist_to_door:.2f}m")
+                print(f"{LOG_PREFIX} [DOOR_INTERACTION] state=READY_TO_OPEN "
+                      f"clearance_west={clear_left:.2f}m clearance_east={clear_right:.2f}m "
+                      f"envelope<={self.DOOR_INTERACTION_MAX:.2f}m")
+
+                # Gated rotate to door normal -- only if drift > 15 deg.
+                if normal is not None and current_heading is not None:
+                    if abs(heading_err_deg) > 15.0:
+                        print(f"{LOG_PREFIX} open_door: heading drift {heading_err_deg:+.1f}deg -> rotate to door normal")
+                        try:
+                            nav.rotate_to_heading(normal, tolerance_rad=math.radians(12.0), timeout_s=6.0)
+                        except Exception as _exc:
+                            print(f"{LOG_PREFIX} open_door: rotate exception {_exc} - skipping")
+                    else:
+                        print(f"{LOG_PREFIX} open_door: heading aligned ({heading_err_deg:+.1f}deg) - no rotate")
+
             from skills.open_door import open_door_by_label
-            # Convert internal door IDs into the human-facing label used by the skill implementation.
             door = self._house.find_door_by_id(door_id)
             label = door.get("label", door_id) if door else door_id
             success = open_door_by_label(
@@ -403,97 +478,70 @@ class Executor:
 
     def _cross_doorway(self, door_id: str, target_id: str) -> ExecutionResult:
         """
-        Drive straight through an opened doorway into the destination room.
+        Universal door-crossing: walk straight from the current pose through
+        the doorway into the room. ONE model for every door.
 
-        After open_door the robot sits on the hallway side of the frame. Going
-        straight to room center via the planner usually drifts and clips the
-        frame because the room target is metres past the wall. This step
-        instead walks to a short waypoint just inside the room (computed from
-        door geometry), keeping x fixed to the door centreline, so the robot
-        passes cleanly through before turning toward the room.
+        Geometry (no per-room branching):
+          door_centre = approach DEF translation
+          door_normal = +pi/2 for north-wall doors, -pi/2 for south-wall doors
+          entry       = door_centre + normal * DOOR_ENTRY_OFFSET_M
+
+        Procedure:
+          1. Rotate to door normal (only if heading drift > 15 deg).
+          2. Burst forward toward entry waypoint. The burst's own
+             rotate_toward_target keeps heading at door normal.
+          3. Done. No lineup nav, no per-room offsets, no extra rotates.
         """
         try:
             approach = self._house.get_door_approach_position(door_id)
-            target_pos = self._house.get_target_translation(target_id)
-            if approach is None or target_pos is None:
-                print(f"{LOG_PREFIX} cross_doorway: missing geometry door={door_id} target={target_id}")
+            if approach is None:
+                print(f"{LOG_PREFIX} cross_doorway: missing geometry door={door_id}")
                 return ExecutionResult("success")
 
-            entry_offset = self.DOOR_ENTRY_OFFSET_M
-            lateral = self.DOOR_ENTRY_LATERAL_M
-            lineup = self.DOOR_LINEUP_OFFSET_M
-            arrive = self.DOOR_ENTRY_ARRIVE_M
-            if door_id == self.BEDROOM_DOOR_ID:
-                entry_offset = self.BEDROOM_ENTRY_OFFSET_M
-                lateral = self.BEDROOM_ENTRY_LATERAL_M
-                lineup = self.BEDROOM_LINEUP_OFFSET_M
-                arrive = self.BEDROOM_ENTRY_ARRIVE_M
-            elif door_id == self.BATHROOM_DOOR_ID:
-                entry_offset = self.BATHROOM_ENTRY_OFFSET_M
-                lateral = self.BATHROOM_ENTRY_LATERAL_M
-                lineup = self.BATHROOM_LINEUP_OFFSET_M
-                arrive = self.BATHROOM_ENTRY_ARRIVE_M
-
-            lineup_arrive = self.DOOR_LINEUP_ARRIVE_M
-            if door_id == self.BEDROOM_DOOR_ID:
-                lineup_arrive = self.BEDROOM_LINEUP_ARRIVE_M
-            elif door_id == self.BATHROOM_DOOR_ID:
-                lineup_arrive = self.BATHROOM_LINEUP_ARRIVE_M
-
-            lineup_pt, entry = self._door_crossing_waypoints(
-                door_id, (approach[0], approach[1]), (target_pos[0], target_pos[1]),
-                entry_offset_m=entry_offset,
-                lateral_m=lateral,
-                lineup_offset_m=lineup,
-            )
-            lx, ly = lineup_pt
-            ex, ey = entry
-            print(f"{LOG_PREFIX} cross_doorway: door={door_id} lineup=({lx:.2f}, {ly:.2f}) entry=({ex:.2f}, {ey:.2f}) arrive={arrive:.2f}")
-
-            # Face the entry waypoint then drive in short bursts. Straight-line
-            # bursts avoid the planner-side cross-track oscillation seen when
-            # the room target sits several metres away.
-            nav = self._get_nav_controller()
-            pos = self._robot_pos_2d()
-            dist_to_approach = self._dist2d(pos, (approach[0], approach[1])) if pos is not None else None
-            if dist_to_approach is not None and dist_to_approach <= 0.45:
-                print(f"{LOG_PREFIX} cross_doorway: skipping lineup (already near approach dist={dist_to_approach:.2f}m)")
-            elif pos is None or self._dist2d(pos, (lx, ly)) > (lineup_arrive * 1.25):
-                self._guarded_navigate_to_point(
-                    lx, ly,
-                    arrive_dist=lineup_arrive,
-                    phase="door_lineup",
-                )
-
-            door_heading = None
-            try:
-                door_heading = nav._doorway_detector.compute_approach_heading(door_id)
-            except Exception:
-                door_heading = None
-
-            if door_heading is not None:
-                nav.rotate_to_heading(
-                    door_heading,
-                    tolerance_rad=math.radians(8.0),
-                    timeout_s=12.0,
-                )
-                print(f"{LOG_PREFIX} cross_doorway: aligned to door normal")
+            cx, cy = approach[0], approach[1]
+            # Door normal: north-wall doors face +y (into the room), south-wall doors face -y.
+            if cy > 0.0:
+                normal = math.pi / 2.0
+                ex, ey = cx, cy + self.DOOR_ENTRY_OFFSET_M
             else:
-                nav.rotate_toward_target((ex, ey, 0.0))
+                normal = -math.pi / 2.0
+                ex, ey = cx, cy - self.DOOR_ENTRY_OFFSET_M
 
+            print(f"{LOG_PREFIX} cross_doorway: door={door_id} centre=({cx:.2f}, {cy:.2f}) "
+                  f"entry=({ex:.2f}, {ey:.2f}) normal={math.degrees(normal):+.0f}deg "
+                  f"offset={self.DOOR_ENTRY_OFFSET_M:.2f}m arrive={self.DOOR_ENTRY_ARRIVE_M:.2f}m")
+
+            nav = self._get_nav_controller()
+
+            # Step 1: align to door normal, gated on actual drift (>15 deg).
+            current = nav.get_current_heading()
+            reorient_needed = False
+            if current is not None:
+                err = math.atan2(math.sin(normal - current), math.cos(normal - current))
+                if abs(err) > math.radians(15.0):
+                    reorient_needed = True
+                    print(f"{LOG_PREFIX} cross_doorway: heading drift {math.degrees(err):+.1f}deg -> align to door normal")
+                    nav.rotate_to_heading(normal, tolerance_rad=math.radians(12.0), timeout_s=6.0)
+                else:
+                    print(f"{LOG_PREFIX} cross_doorway: heading aligned ({math.degrees(err):+.1f}deg)")
+            print(f"{LOG_PREFIX} [DOOR_ENTRY] mode=STRAIGHT_ENTRY reorientation_needed={reorient_needed} "
+                  f"entry=({ex:.2f}, {ey:.2f}) arrive={self.DOOR_ENTRY_ARRIVE_M:.2f}m")
+
+            # Step 2: straight burst through the door. rotate_first=True so
+            # the burst can self-correct if any residual yaw exists.
             ok = self._straight_line_approach(
                 ex, ey,
-                arrive_dist=arrive,
+                arrive_dist=self.DOOR_ENTRY_ARRIVE_M,
                 burst_steps=6,
                 max_bursts=24,
-                rotate_first=False,
+                rotate_first=True,
             )
+
             pos = self._robot_pos_2d()
             if pos is not None:
                 dist = self._dist2d(pos, (ex, ey))
-                print(f"{LOG_PREFIX} cross_doorway: final pos=({pos[0]:.2f}, {pos[1]:.2f}) dist_to_entry={dist:.2f}m")
-            # Treat as success even on short fall-short so the room navigate
-            # step still runs and can finish the trip.
+                print(f"{LOG_PREFIX} cross_doorway: final pos=({pos[0]:.2f}, {pos[1]:.2f}) dist_to_entry={dist:.2f}m ok={ok}")
+            # Always report success so the room-level navigate step runs next.
             return ExecutionResult("success", details={"door": door_id, "ok": ok})
         except Exception as exc:
             print(f"{LOG_PREFIX} cross_doorway: exception {exc}")
@@ -683,6 +731,14 @@ class Executor:
         except Exception:
             pass
 
+        # Fix C: floor arrive_dist by ~2x the per-burst forward gain in the
+        # caution zone. Below that, motion-file lateral drift exceeds forward
+        # progress and the walk loop cannot converge (bedroom oscillation bug).
+        # 6 caution-burst steps x ~5 mm/step => ~30 mm forward gain => 60 mm floor.
+        MIN_ARRIVE_M = 0.06
+        if arrive_dist < MIN_ARRIVE_M:
+            print(f"{LOG_PREFIX} Guard: floor arrive_dist {arrive_dist:.2f} -> {MIN_ARRIVE_M:.2f} (motion granularity)")
+            arrive_dist = MIN_ARRIVE_M
         trial_arrive = arrive_dist
         for attempt in range(1, max_retries + 2):
             unstable = self._is_unstable()
