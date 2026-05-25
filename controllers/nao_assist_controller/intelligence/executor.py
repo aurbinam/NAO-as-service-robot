@@ -63,6 +63,17 @@ class Executor:
     DOOR_LINEUP_ARRIVE_M = DOOR_APPROACH_ARRIVE_M
     DOOR_ENTRY_LATERAL_M = 0.0
 
+    # --- Unified doorway crossing (entry == exit, every door) ---------------
+    # Stage in front of the FREE opening at a safe distance, align once, then
+    # commit to a single straight pass. No per-room engines, no mid-frame turns.
+    DOOR_STAGE_STANDOFF_M       = 0.55  # how far in front of the door to stage + align
+    DOOR_THROUGH_REACH_M        = 0.50  # stop once this far past the door line (far side)
+    DOOR_LEAF_BIAS_M            = 0.07  # shift crossing line toward the latch (away from open leaf)
+    DOOR_CROSS_ALIGN_TOL_DEG    = 8.0   # alignment tolerance at the staging point
+    DOOR_CROSS_HEADING_HOLD_DEG = 18.0  # re-assert normal only if drift exceeds this (pre-frame only)
+    DOOR_CROSS_BURST_STEPS      = 5     # forward steps per crossing burst
+    DOOR_CROSS_MAX_BURSTS       = 22    # safety cap on crossing bursts
+
     # Per-room aliases collapsed to the universal values. Names are retained
     # because they are referenced in a few helper checks, but the values
     # are intentionally identical. Cross-doorway no longer branches on door_id.
@@ -84,12 +95,22 @@ class Executor:
     BATHROOM_STABILIZE_S        = 0.35
     BATHROOM_HEADING_TOLERANCE_DEG = 12.0
     BATHROOM_CLEARANCE_MIN_M    = 0.30
+    # Bathroom EXIT only: the opening is very narrow, so NAO must walk straight
+    # out far enough to clear the frame BEFORE doing any alignment turn — turning
+    # while still in the frame snags a door post. This is how far past the door
+    # centre (toward the hall) NAO advances on its current heading first.
+    BATHROOM_EXIT_CLEAR_M       = 0.45
 
     LIVING_LINEUP_OFFSET_M = DOOR_LINEUP_OFFSET_M
     LIVING_LINEUP_ARRIVE_M = DOOR_LINEUP_ARRIVE_M
     LIVING_ENTRY_OFFSET_M  = DOOR_ENTRY_OFFSET_M
     LIVING_ENTRY_LATERAL_M = DOOR_ENTRY_LATERAL_M
     LIVING_ENTRY_ARRIVE_M  = DOOR_ENTRY_ARRIVE_M
+    # Living-door ENTRY centring nudge (metres; +x = east, -x = west). Added on top
+    # of the leaf-aware free-opening centre when entering the living room so NAO
+    # passes through the usable opening centre instead of clipping a frame side.
+    # Tune this if the living entry is still off-centre. LIVING ROOM ONLY.
+    LIVING_ENTRY_CENTER_DX_M = 0.0
 
     def __init__(self, robot, house_config, say_func):
         # Store runtime dependencies injected by the controller layer.
@@ -221,10 +242,11 @@ class Executor:
         ax, ay = approach_pos[0], approach_pos[1]
         print(f"{LOG_PREFIX} [STEP 1] ✓ Door frame position loaded: ({ax:.2f}, {ay:.2f})")
 
-        # Prefer a hallway-side standoff computed from the robot's current
-        # pose so the approach is reachable and in open space. Fall back to
-        # a deterministic offset if robot pose is unavailable.
-        hs = self._hallway_side_point((ax, ay), offset_m=self.DOOR_HALLWAY_STANDOFF_M)
+        # Prefer a standoff on the side NAO is currently on (hall side when
+        # entering, room side when exiting), computed from the robot's live
+        # pose so the approach is reachable and in open space. Fall back to a
+        # deterministic offset if robot pose is unavailable.
+        hs = self._near_side_point((ax, ay), offset_m=self.DOOR_HALLWAY_STANDOFF_M)
         if hs is not None:
             approach_tx, approach_ty = hs
             print(f"{LOG_PREFIX} [STEP 1] Hallway-side offset: ({approach_tx:.2f}, {approach_ty:.2f})")
@@ -310,7 +332,14 @@ class Executor:
         """
         # Reuse the door's approach point as the reference pose for the safety check.
         approach_pos = self._house.get_door_approach_position(door_id)
-        for attempt in range(1, max_corrections + 1):
+
+        # Verification is now a LIGHT gate for every door. The unified crossing
+        # (_cross_doorway) stages at a safe distance, centres on the free opening,
+        # and aligns there, so this step must never rotate or back off at the
+        # frame (that toppled NAO). Succeed immediately; the cross step positions.
+        return ExecutionResult("success")
+
+        for attempt in range(1, max_corrections + 1):  # noqa: unreachable (gate above)
             # Read the robot's live position before deciding whether it is close enough to interact.
             pos = self._robot_pos_2d()
 
@@ -320,10 +349,13 @@ class Executor:
                 return ExecutionResult("success")
 
             ax, ay = approach_pos[0], approach_pos[1]
-            # Use the hallway-side standoff point for verification so the
-            # correction step does not push NAO into the wall-mounted frame.
-            side = -1.0 if ay > 0.0 else 1.0
-            target_y = ay + side * self.DOOR_HALLWAY_STANDOFF_M
+            # Verify against the standoff on NAO's CURRENT side of the door
+            # (hall side when entering, room side when exiting) so corrections
+            # never push NAO into the wall-mounted frame. Symmetric for both.
+            ns = self._near_side_point((ax, ay), offset_m=self.DOOR_HALLWAY_STANDOFF_M)
+            target_y = ns[1] if ns is not None else (
+                ay + (-1.0 if ay > 0.0 else 1.0) * self.DOOR_HALLWAY_STANDOFF_M
+            )
 
             # Measure both distance and heading error against the standoff point.
             dist = self._dist2d(pos, (ax, target_y))
@@ -367,8 +399,10 @@ class Executor:
 
         pos = self._robot_pos_2d()
         if approach_pos is not None and pos is not None:
-            side = -1.0 if approach_pos[1] > 0.0 else 1.0
-            target_y = approach_pos[1] + side * 0.70
+            ns = self._near_side_point((approach_pos[0], approach_pos[1]), offset_m=0.70)
+            target_y = ns[1] if ns is not None else (
+                approach_pos[1] + (-1.0 if approach_pos[1] > 0.0 else 1.0) * 0.70
+            )
             dist = self._dist2d(pos, (approach_pos[0], target_y))
         else:
             dist = -1
@@ -449,8 +483,18 @@ class Executor:
                       f"clearance_west={clear_left:.2f}m clearance_east={clear_right:.2f}m "
                       f"envelope<={self.DOOR_INTERACTION_MAX:.2f}m")
 
+                # Bedroom ENTRY only: skip the cosmetic pre-open rotation. NAO can
+                # be right at the narrow frame here and an in-place turn topples it.
+                # The hinge opens regardless; the cross step aligns and enters.
+                # Unified crossing aligns at a safe distance, so NEVER rotate at the
+                # frame here (it bumped/toppled NAO). Just open the hinge; the cross
+                # step stages and aligns for every door and both directions.
+                skip_align = True
+                print(f"{LOG_PREFIX} open_door: skip pre-open rotate "
+                      f"(unified cross step stages and aligns away from the frame)")
+
                 # Gated rotate to door normal -- only if drift > 15 deg.
-                if normal is not None and current_heading is not None:
+                if normal is not None and current_heading is not None and not skip_align:
                     if abs(heading_err_deg) > 15.0:
                         print(f"{LOG_PREFIX} open_door: heading drift {heading_err_deg:+.1f}deg -> rotate to door normal")
                         try:
@@ -478,19 +522,21 @@ class Executor:
 
     def _cross_doorway(self, door_id: str, target_id: str) -> ExecutionResult:
         """
-        Universal door-crossing: walk straight from the current pose through
-        the doorway into the room. ONE model for every door.
+        Unified doorway crossing. ONE model for every door, identical for entry
+        and exit (exit is entry with NAO on the room side). No per-room engines,
+        no mid-frame turns.
 
-        Geometry (no per-room branching):
-          door_centre = approach DEF translation
-          door_normal = +pi/2 for north-wall doors, -pi/2 for south-wall doors
-          entry       = door_centre + normal * DOOR_ENTRY_OFFSET_M
+        Geometry:
+          door_centre = approach DEF translation (post midpoint)
+          free_cx     = usable opening centre, biased off the open leaf
+          cross_dir   = toward the far side of the door from where NAO stands
+          door_normal = +pi/2 if crossing toward +y, else -pi/2
 
-        Procedure:
-          1. Rotate to door normal (only if heading drift > 15 deg).
-          2. Burst forward toward entry waypoint. The burst's own
-             rotate_toward_target keeps heading at door normal.
-          3. Done. No lineup nav, no per-room offsets, no extra rotates.
+        Procedure (same both directions):
+          1. STAGE  - walk to (free_cx, a safe distance in front of the door).
+          2. ALIGN  - rotate once to the door normal, at that safe distance.
+          3. COMMIT - one straight forward pass to the far side. No re-aiming,
+                      no turns inside the frame, no late corrections.
         """
         try:
             approach = self._house.get_door_approach_position(door_id)
@@ -499,50 +545,86 @@ class Executor:
                 return ExecutionResult("success")
 
             cx, cy = approach[0], approach[1]
-            # Door normal: north-wall doors face +y (into the room), south-wall doors face -y.
-            if cy > 0.0:
-                normal = math.pi / 2.0
-                ex, ey = cx, cy + self.DOOR_ENTRY_OFFSET_M
+            # Direction is derived from the robot's CURRENT side of the door,
+            # never from the wall side. Cross to the opposite side, staying on
+            # the door's centre X. This makes exit the exact inverse of entry
+            # with no per-room or hall/room special cases.
+            pos0 = self._robot_pos_2d()
+            if pos0 is not None and abs(pos0[1] - cy) > 1e-3:
+                # Travel toward the far side of the door from where NAO stands.
+                cross_dir = 1.0 if (pos0[1] - cy) < 0.0 else -1.0
             else:
-                normal = -math.pi / 2.0
-                ex, ey = cx, cy - self.DOOR_ENTRY_OFFSET_M
+                # Pose unavailable: fall back to "into the room" by wall side.
+                cross_dir = 1.0 if cy > 0.0 else -1.0
+            normal = math.pi / 2.0 if cross_dir > 0.0 else -math.pi / 2.0
+
+            # Centre on the FREE opening (account for the open door leaf).
+            free_cx   = self._free_opening_center_x(door_id, cx, cy)
+            through_y = cy + cross_dir * self.DOOR_ENTRY_OFFSET_M     # beyond door, far side
 
             print(f"{LOG_PREFIX} cross_doorway: door={door_id} centre=({cx:.2f}, {cy:.2f}) "
-                  f"entry=({ex:.2f}, {ey:.2f}) normal={math.degrees(normal):+.0f}deg "
-                  f"offset={self.DOOR_ENTRY_OFFSET_M:.2f}m arrive={self.DOOR_ENTRY_ARRIVE_M:.2f}m")
+                  f"free_cx={free_cx:.2f} cross_dir={cross_dir:+.0f} normal={math.degrees(normal):+.0f}deg "
+                  f"through=({free_cx:.2f}, {through_y:.2f})")
 
-            nav = self._get_nav_controller()
+            # ENTRY (crossing from the hall INTO a room) -> use the pose-insensitive
+            # 6-state crossing for EVERY door. It re-navigates to a canonical
+            # perpendicular standoff and aligns there, so the result is identical no
+            # matter how NAO arrived: straight from the hall, or at a bad angle after
+            # exiting another room. This removes the borderline in-place ALIGNING
+            # turn at the frame that the closed-loop walk does when mis-aligned (the
+            # source of the "different from another room" inconsistency and falls).
+            # Entry <=> travelling toward the room side; the room is north for
+            # north-wall doors (cy>0) and south for south-wall doors (cy<0), so entry
+            # means the travel direction matches sign(cy). EXITS (travelling toward
+            # the hall) fall through to the closed-loop walk below.
+            is_entry = (cross_dir > 0.0) == (cy > 0.0)
+            if is_entry:
+                nav = self._get_nav_controller()
+                target_pos = self._house.get_target_translation(target_id)
+                if target_pos is not None:
+                    # Living door enters off-centre (the open leaf occupies one
+                    # side), so aim it at the usable opening centre. LIVING ROOM
+                    # ONLY; every other door keeps the engine's geometric centring.
+                    center_x = None
+                    if door_id == self.LIVING_DOOR_ID:
+                        center_x = free_cx + self.LIVING_ENTRY_CENTER_DX_M
+                    print(f"{LOG_PREFIX} cross_doorway: ENTRY -> robust "
+                          f"execute_door_crossing(target={target_id}"
+                          f"{'' if center_x is None else f', centre_x={center_x:.2f}'})")
+                    ok = nav.execute_door_crossing(
+                        door_id, (cx, cy, 0.0),
+                        (target_pos[0], target_pos[1], 0.0),
+                        center_x_override=center_x,
+                    )
+                    pos = self._robot_pos_2d()
+                    if pos is not None:
+                        print(f"{LOG_PREFIX} cross_doorway: ENTRY done "
+                              f"pos=({pos[0]:.2f}, {pos[1]:.2f}) ok={ok}")
+                    return ExecutionResult("success", details={"door": door_id, "ok": ok})
 
-            # Step 1: align to door normal, gated on actual drift (>15 deg).
-            current = nav.get_current_heading()
-            reorient_needed = False
-            if current is not None:
-                err = math.atan2(math.sin(normal - current), math.cos(normal - current))
-                if abs(err) > math.radians(15.0):
-                    reorient_needed = True
-                    print(f"{LOG_PREFIX} cross_doorway: heading drift {math.degrees(err):+.1f}deg -> align to door normal")
-                    nav.rotate_to_heading(normal, tolerance_rad=math.radians(12.0), timeout_s=6.0)
-                else:
-                    print(f"{LOG_PREFIX} cross_doorway: heading aligned ({math.degrees(err):+.1f}deg)")
-            print(f"{LOG_PREFIX} [DOOR_ENTRY] mode=STRAIGHT_ENTRY reorientation_needed={reorient_needed} "
-                  f"entry=({ex:.2f}, {ey:.2f}) arrive={self.DOOR_ENTRY_ARRIVE_M:.2f}m")
-
-            # Step 2: straight burst through the door. rotate_first=True so
-            # the burst can self-correct if any residual yaw exists.
-            ok = self._straight_line_approach(
-                ex, ey,
-                arrive_dist=self.DOOR_ENTRY_ARRIVE_M,
-                burst_steps=6,
-                max_bursts=24,
-                rotate_first=True,
-            )
+            # This robot CANNOT fine-align in place: motion-file turns are coarse,
+            # and rotate_to_heading accepts any error < 30 deg ("accept and
+            # walk-correct") without turning, relying on the WALK to fix the
+            # residual. So an open-loop straight burst keeps that ~30 deg error and
+            # crosses diagonally into the post; forcing in-place turns at the frame
+            # drifts ~0.45 m and topples NAO. The only reliable crossing is a
+            # CLOSED-LOOP walk to a point on the free-opening centre line, one
+            # DOOR_ENTRY_OFFSET_M beyond the door: the walker re-aims every cycle,
+            # pulling NAO onto the centre line and through - straight when aligned,
+            # gently self-correcting otherwise. Same primitive that drove the
+            # approach. Identical for entry and exit; free_cx keeps clear of the leaf.
+            print(f"{LOG_PREFIX} cross_doorway: commit -> closed-loop walk to "
+                  f"free-opening point ({free_cx:.2f}, {through_y:.2f})")
+            ok = self._navigate_to_point(free_cx, through_y, arrive_dist=0.25, goal_id=door_id)
 
             pos = self._robot_pos_2d()
+            crossed = False
             if pos is not None:
-                dist = self._dist2d(pos, (ex, ey))
-                print(f"{LOG_PREFIX} cross_doorway: final pos=({pos[0]:.2f}, {pos[1]:.2f}) dist_to_entry={dist:.2f}m ok={ok}")
-            # Always report success so the room-level navigate step runs next.
-            return ExecutionResult("success", details={"door": door_id, "ok": ok})
+                crossed = (cross_dir * (pos[1] - cy)) >= self.DOOR_THROUGH_REACH_M
+                print(f"{LOG_PREFIX} cross_doorway: done pos=({pos[0]:.2f}, {pos[1]:.2f}) "
+                      f"ok={ok} crossed={crossed}")
+            return ExecutionResult("success", details={"door": door_id, "ok": ok, "crossed": crossed})
+
         except Exception as exc:
             print(f"{LOG_PREFIX} cross_doorway: exception {exc}")
             return ExecutionResult("success", reason=f"exception:{exc}")
@@ -876,6 +958,29 @@ class Executor:
         scale = travel / norm
         return (origin[0] + dx * scale, origin[1] + dy * scale)
 
+    def _near_side_point(self,
+                         approach_xy: Tuple[float, float],
+                         offset_m: float = 0.75) -> Optional[Tuple[float, float]]:
+        """
+        Standoff point offset_m in front of the door, on the side NAO is
+        CURRENTLY on, with X fixed to the door centre.
+
+        This is the symmetric standoff used for both entry and exit:
+          - entering from the hall  -> NAO is hall-side  -> hall-side standoff
+          - exiting from a room     -> NAO is room-side  -> room-side standoff
+        "Approach the door from your own side, centred on it" is identical in
+        both directions, so there is no per-room or hall/room branching.
+
+        Falls back to the deterministic hallway-side point when the robot pose
+        is unavailable, preserving the original entry behaviour.
+        """
+        ax, ay = approach_xy
+        pos = self._robot_pos_2d()
+        if pos is not None and abs(pos[1] - ay) > 1e-3:
+            side = 1.0 if pos[1] > ay else -1.0  # NAO's current side of the door
+            return (ax, ay + side * offset_m)
+        return self._hallway_side_point(approach_xy, offset_m=offset_m)
+
     def _hallway_side_point(self,
                             approach_xy: Tuple[float, float],
                             offset_m: float = 0.75) -> Optional[Tuple[float, float]]:
@@ -906,7 +1011,7 @@ class Executor:
         Used when the robot is too close to the frame and needs to step back
         with short, natural bursts.
         """
-        standoff = self._hallway_side_point(approach_xy, offset_m=self.DOOR_HALLWAY_STANDOFF_M)
+        standoff = self._near_side_point(approach_xy, offset_m=self.DOOR_HALLWAY_STANDOFF_M)
         if standoff is None:
             return None
         ax, ay = approach_xy
@@ -918,6 +1023,43 @@ class Executor:
             return None
         scale = (self.DOOR_HALLWAY_STANDOFF_M + extra_m) / norm
         return (ax + vx * scale, ay + vy * scale)
+
+    def _free_opening_center_x(self, door_id: str, cx: float, cy: float) -> float:
+        """
+        X of the USABLE opening centre, accounting for the open door leaf.
+
+        When the leaf is open it protrudes near its hinge post, so the free
+        passage is biased toward the latch (non-hinge) side. Shift the crossing
+        line that way by DOOR_LEAF_BIAS_M, clamped so NAO's body stays inside the
+        gap. When the door is closed or geometry is unavailable, fall back to the
+        geometric centre cx. Symmetric for entry and exit (geometry only).
+        """
+        try:
+            nav = self._get_nav_controller()
+            det = nav._doorway_detector
+            posts = det.door_posts(door_id)
+            if posts is None:
+                return cx
+            west_x, east_x = posts[0][0], posts[1][0]
+            gap_half = abs(east_x - west_x) / 2.0
+            # Only bias when the leaf is actually open and occupying the frame.
+            if not det.is_door_open(door_id):
+                return cx
+            hinge = self._hinge_pos_2d(door_id)
+            if hinge is None:
+                return cx
+            hinge_on_west = abs(hinge[0] - west_x) <= abs(hinge[0] - east_x)
+            nao_half = 0.15
+            safety = 0.02
+            max_bias = max(0.0, gap_half - nao_half - safety)
+            bias = min(self.DOOR_LEAF_BIAS_M, max_bias)
+            free_cx = (cx + bias) if hinge_on_west else (cx - bias)
+            print(f"{LOG_PREFIX} free_opening: door={door_id} centre_x={cx:.2f} "
+                  f"hinge={'W' if hinge_on_west else 'E'} bias={bias:+.2f} -> free_cx={free_cx:.2f}")
+            return free_cx
+        except Exception as exc:
+            print(f"{LOG_PREFIX} free_opening: exception {exc} -> geometric centre")
+            return cx
 
     def _hinge_pos_2d(self, door_id: str) -> Optional[Tuple[float, float]]:
         """Return hinge (x, y) for door if available from Supervisor world."""

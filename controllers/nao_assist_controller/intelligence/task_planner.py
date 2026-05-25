@@ -71,15 +71,21 @@ class TaskPlanner:
     #  Public API                                                          #
     # ------------------------------------------------------------------ #
 
-    def plan(self, intent: Dict[str, Any]) -> List[Action]:
+    def plan(self, intent: Dict[str, Any], current_xy: Optional[Tuple[float, float]] = None) -> List[Action]:
         kind = intent.get("intent")
         if kind == "navigate":
-            return self._plan_navigate(intent["targets"][0])
+            return self._plan_navigate(intent["targets"][0], current_xy=current_xy)
         if kind == "multi_step":
             actions: List[Action] = []
+            # Track the predicted end pose across legs so each navigate can
+            # plan its own room exit (a chained leg starts where the previous
+            # one ended — the target room centre).
+            pose = current_xy
             for step in intent.get("steps", []):
                 if step["action"] == "navigate":
-                    actions.extend(self._plan_navigate(step["target"]))
+                    actions.extend(self._plan_navigate(step["target"], current_xy=pose))
+                    tpos = self._house.get_target_translation(step["target"], use_cache=False)
+                    pose = (tpos[0], tpos[1]) if tpos else None
             return actions
         if kind == "door_operation":
             # Even standalone door operations need spatial preconditions
@@ -102,7 +108,7 @@ class TaskPlanner:
     #  Core planning: spatial preconditions enforced here, at plan time   #
     # ------------------------------------------------------------------ #
 
-    def _plan_navigate(self, target_id: str) -> List[Action]:
+    def _plan_navigate(self, target_id: str, current_xy: Optional[Tuple[float, float]] = None) -> List[Action]:
         """
         Decompose navigation into segments through door checkpoints.
 
@@ -140,6 +146,23 @@ class TaskPlanner:
         # Get explicit route_doors from config (correct topology)
         route_doors = self._house.get_route_doors_for_target(target_id)
         print(f"{LOG_PREFIX} [PLAN] Target '{target_id}' requires {len(route_doors)} doors: {route_doors}")
+
+        # If NAO is currently INSIDE a room, leave it first with a controlled,
+        # centred crossing of that room's door — the exact inverse of entering.
+        # Without this, exiting the current room is only a side-effect of
+        # approaching the destination door, with no centering/alignment for the
+        # door being left, so NAO clips the frame. Same pipeline as entry; no
+        # per-room special cases.
+        if current_xy is not None:
+            cur_door = self._current_room_door(current_xy)
+            if cur_door is not None and cur_door not in route_doors:
+                print(f"{LOG_PREFIX} [PLAN] NAO is inside the room of '{cur_door}' "
+                      f"-> prepending controlled exit (inverse of entry)")
+                actions.append(("navigate_door_approach", cur_door))
+                actions.append(("verify_safe_approach", cur_door,
+                                self._safety_margin, self._interaction_range))
+                actions.append(("open_door", cur_door))
+                actions.append(("cross_doorway", cur_door, target_id))
 
         if not route_doors:
             # Direct navigation — no doors on route
@@ -192,6 +215,41 @@ class TaskPlanner:
 
     def _plan_navigate_segment(self, target_id: str) -> List[Action]:
         return [("navigate", target_id)]
+
+    def _current_room_door(self, current_xy: Tuple[float, float]) -> Optional[str]:
+        """
+        Return the door of the room NAO is currently inside, or None if NAO is
+        in the hall corridor (no exit needed).
+
+        The hall is the band between the two dividing walls. The walls coincide
+        with the door frame Y lines, so the band is derived from the door
+        geometry itself — no hardcoded coordinates, no per-room logic. When NAO
+        is beyond a wall it is inside a room; the room's door is the one on that
+        wall nearest in X.
+        """
+        frames = []  # (door_id, cx, cy)
+        for door_id in self._house.list_doors():
+            ap = self._house.get_door_approach_position(door_id)
+            if ap is not None:
+                frames.append((door_id, ap[0], ap[1]))
+        if not frames:
+            return None
+
+        x, y = current_xy
+        ys = [cy for _, _, cy in frames]
+        north_y, south_y = max(ys), min(ys)
+
+        # Inside the corridor between the dividing walls -> already in the hall.
+        if south_y <= y <= north_y:
+            return None
+
+        # Beyond a wall -> inside a room. Pick the door on that wall nearest in X.
+        wall_y = north_y if y > north_y else south_y
+        same_wall = [(d, cx) for d, cx, cy in frames if abs(cy - wall_y) < 1e-6]
+        if not same_wall:
+            return None
+        best = min(same_wall, key=lambda t: abs(t[1] - x))
+        return best[0]
 
     def _plan_door_operation(self, operation: str, door_label: str) -> List[Action]:
         """

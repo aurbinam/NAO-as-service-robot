@@ -53,7 +53,8 @@ from user_profile import (
 from house.house_loader import load_house, get_house_config
 from intelligence.robot_brain import RobotBrain
 from intelligence.executor import Executor
-from assistive_tasks import AssistiveStateMachine
+from assistive_tasks import AssistiveStateMachine, AssistiveState
+from companion_brain import CompanionBrain
 
 # =============================================================================
 # PROJECT PATHS
@@ -201,6 +202,7 @@ class NAOAssistController:
         self._identity_confirmed = False
         self._user_profile = None
         self._needs_reset = False
+        self._companion = None
     
     def _init_devices(self):
         """Initialize NAO devices."""
@@ -310,6 +312,7 @@ class NAOAssistController:
         self._user_profile = None
         self._typed_name = None
         self._needs_reset = True
+        self._companion = None
         
         # Cleanup any existing TCP connection
         self._cleanup_tcp()
@@ -552,7 +555,7 @@ class NAOAssistController:
         self._step_seconds(0.6)
         
         # Greeting
-        self.say("Hello! I am NAO, your assistant.")
+        self.say("Hello. I am NAO, and I am here with you.")
         self.say("What is your name?")
         
         print(f"{LOG_PREFIX} Waiting for name via TCP ({TCP_HOST}:{TCP_PORT})...")
@@ -633,9 +636,10 @@ class NAOAssistController:
             print(f"{LOG_PREFIX} Warning: Failed to save profile")
         
         # Confirm to user
-        self.say(f"Nice to meet you, {user_name}. I am ready.")
+        self.say(f"Nice to meet you, {user_name}. I am here with you.")
         
         self._identity_confirmed = True
+        self._companion = CompanionBrain(self.say, self._user_profile, save_profile)
         return True
     
     # =========================================================================
@@ -703,9 +707,10 @@ class NAOAssistController:
                 self._user_profile = load_profile()
                 print(f"{LOG_PREFIX} Existing profile found: {self._user_profile.name}")
                 self._identity_confirmed = True
+                self._companion = CompanionBrain(self.say, self._user_profile, save_profile)
                 
                 # Greet returning user
-                self.say(f"Welcome back, {self._user_profile.name}. I am ready.")
+                self.say(f"Welcome back, {self._user_profile.name}. I am glad you are here.")
             else:
                 if self._needs_reset:
                     # After reset, just ask for name
@@ -717,7 +722,7 @@ class NAOAssistController:
                 if not self._capture_identity():
                     if self._needs_reset:
                         # Reset was triggered during capture, restart loop
-                        self.say("Resetting. What is your name?")
+                        self.say("Let us start fresh. What is your name?")
                         continue
                     else:
                         print(f"{LOG_PREFIX} Simulation ended during identity capture")
@@ -753,10 +758,19 @@ class NAOAssistController:
                 if self._assistive_state_machine:
                     self._assistive_state_machine.tick(self.robot.getTime())
 
+                # Proactive companionship and reminders (idle only)
+                if self._companion:
+                    assistive_busy = (
+                        self._assistive_state_machine is not None and
+                        self._assistive_state_machine.state != AssistiveState.IDLE
+                    )
+                    for msg in self._companion.tick(time.time(), assistive_busy=assistive_busy):
+                        self.say(msg)
+
                 # Check for demo reset key
                 if self._check_reset_key():
                     self._perform_reset()
-                    self.say("Resetting. What is your name?")
+                    self.say("Let us start fresh. What is your name?")
                     reset_triggered = True
                     break  # Exit inner loop to restart identity capture
                 
@@ -769,7 +783,7 @@ class NAOAssistController:
                     if is_reset_command(msg):
                         print(f"{LOG_PREFIX} [RESET] TCP reset command in READY state: '{msg}'")
                         self._perform_reset()
-                        self.say("Resetting. What is your name?")
+                        self.say("Let us start fresh. What is your name?")
                         reset_triggered = True
                         break
                     
@@ -814,8 +828,17 @@ class NAOAssistController:
                             self.say(f"I know these places: {places_str}")
                         else:
                             self.say("Sorry, I don't have any house information loaded.")
+                    elif cmd_type in ("GO_TO_UNKNOWN", "GUIDE_TO_UNKNOWN"):
+                        rooms = self._house_config.list_targets() if self._house_config else []
+                        rooms_str = ", ".join(r.replace("_", " ") for r in rooms) or "kitchen, bedroom, bathroom"
+                        self.say(
+                            "I am not sure which room you mean. "
+                            f"Please say one of these: {rooms_str}."
+                        )
                     else:
-                        self.say("I didn't understand. Try 'go to', 'open the door', or 'list places'.")
+                        if self._companion and self._companion.handle_message(msg):
+                            continue
+                        self.say("I am not sure I understood. You can say 'go to' or 'open the door'.")
                 
                 if reset_triggered:
                     break

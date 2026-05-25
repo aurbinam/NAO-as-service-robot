@@ -91,21 +91,24 @@ class RobotBrain:
         intent = self._interpreter.interpret(user_input)
 
         if intent.get("intent") == "unknown":
-            self._say("I could not understand that command. Please try again.")
+            self._say("I am not sure I understood. Could you say it again, please?")
             return self._fail("interpretation_failed")
 
         # -- Layer 2: plan --
         self._transition(RobotState.PLANNING)
 
         try:
-            plan = self._planner.plan(intent)
+            # Pass NAO's live position so the planner can prepend a controlled
+            # exit when NAO starts inside a room (exit = inverse of entry).
+            current_xy = self._executor._robot_pos_2d()
+            plan = self._planner.plan(intent, current_xy=current_xy)
         except ValueError as exc:
-            self._say(f"I cannot plan this task: {exc}")
+            self._say("I am sorry, I cannot do that right now. Let's try something simpler.")
             return self._fail(f"planning_error:{exc}")
 
         errors = self._planner.validate(plan)
         if errors:
-            self._say(f"Plan validation failed: {'; '.join(errors)}")
+            self._say("I found a problem with that plan. Let us try another way.")
             return self._fail(f"invalid_plan:{errors}")
 
         self._plan = plan
@@ -149,14 +152,11 @@ class RobotBrain:
             # Step failed - attempt replanning
             recovered = self._handle_failure(action, result)
             if not recovered:
-                self._say(
-                    "I am unable to complete the task. "
-                    f"Failed at: {self._describe(action)}."
-                )
+                self._say("I could not complete that task. I am sorry.")
                 return self._fail(f"step_failed:{result.reason}")
 
         self._transition(RobotState.COMPLETED)
-        self._say("I have completed the task successfully.")
+        self._say("All done. Would you like anything else?")
         return True
 
     # ------------------------------------------------------------------ #
@@ -182,31 +182,20 @@ class RobotBrain:
         reason = result.reason or "unknown"
 
         if "fall" in reason:
-            msg = "I fell during navigation. I will recover and try again."
+            msg = "I fell while moving. I will recover and try again."
         elif "obstacle" in reason or reason == "target_not_reached":
             # Could be wall proximity detected by sonar
             self._collision_count += 1
             new_margin = self._safety_margin + 0.20 * self._collision_count
             self._safety_margin = min(new_margin, 1.50)
             self._planner.set_safety_margin(self._safety_margin)
-            msg = (
-                "I detected an obstacle on the current path. "
-                f"Increasing safety clearance to {self._safety_margin:.2f}m "
-                f"and replanning. (Attempt {attempt} of {self._monitor.max_retries})"
-            )
+            msg = "I see something in the way. I will take a safer path."
         elif "not_reached" in reason:
-            msg = (
-                "The direct path seems blocked. "
-                f"I will adjust my approach. "
-                f"(Attempt {attempt} of {self._monitor.max_retries})"
-            )
+            msg = "The direct path seems blocked. I will adjust my approach."
         elif "progress" in reason or "stuck" in reason:
-            msg = "I am not making progress. I am replanning my route."
+            msg = "I am not making progress. I will try a different way."
         else:
-            msg = (
-                f"I encountered an issue ({reason}). "
-                f"Retrying. (Attempt {attempt} of {self._monitor.max_retries})"
-            )
+            msg = "I ran into a small issue. I will try again."
 
         self._say(msg)
         print(f"{LOG_PREFIX} Replanning step {self._step + 1}: {reason}, "
@@ -238,11 +227,11 @@ class RobotBrain:
         atype = action[0]
 
         if atype == "navigate":
-            return f"I am going to the {_pretty(action[1])}."
+            return f"All right. I will go to the {_pretty(action[1])}."
         if atype == "navigate_door_approach":
             return f"I am approaching the {_pretty(action[1])} door."
         if atype == "verify_safe_approach":
-            return "I am aligning myself to safely operate the door."
+            return "I am lining up to use the door safely."
         if atype == "open_door":
             return f"I am opening the {_pretty(action[1])} door."
         if atype == "cross_doorway":

@@ -210,7 +210,7 @@ class AssistiveStateMachine:
         elapsed = current_time - self._location_timeout_start
         if elapsed >= LOCATION_TIMEOUT_S:
             print(f"{LOG_PREFIX} Location reply timeout ({elapsed:.1f}s)")
-            self._say("I did not receive a response. Please call me again when you need help.")
+            self._say("I did not hear you. I am here when you need me.")
             self._reset()
 
     # ── Public entry point ─────────────────────────────────────────────── #
@@ -244,11 +244,11 @@ class AssistiveStateMachine:
             self._transition(AssistiveState.AWAITING_LOCATION)
             self._location_retry_count = 0
             self._location_timeout_start = self.robot.getTime()
-            self._say("Where are you?")
+            self._say("Where are you right now?")
             return True
 
         if intent == "escort_request_unknown":
-            self._say(f"I would like to help you, but I do not know where '{param}' is.")
+            self._say(f"I would like to help, but I do not know where '{param}' is.")
             return True
 
         if intent == "bring_object":
@@ -283,13 +283,13 @@ class AssistiveStateMachine:
 
         if self._location_retry_count >= MAX_LOCATION_RETRIES:
             self._say(
-                f"I could not determine your location after {MAX_LOCATION_RETRIES} attempts. "
-                f"Please try again later."
+                "I could not figure out your location. "
+                "Please try again in a moment."
             )
             self._reset()
         else:
             self._say(
-                f"I did not recognize that room. "
+                "I did not recognize that room. "
                 f"Please say {rooms_str}."
             )
             # Reset per-retry timeout window
@@ -321,7 +321,7 @@ class AssistiveStateMachine:
             return
 
         print(f"{LOG_PREFIX} Arrived at {user_room}")
-        self._say("I am here.")
+        self._say("I am here with you.")
 
         # ── Step 2: escort (skipped for bare come_request) ─────────── #
         if destination is None:

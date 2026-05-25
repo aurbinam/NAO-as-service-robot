@@ -1978,6 +1978,7 @@ class NavigationController:
         door_id: str,
         approach_pos: Tuple[float, float, float],
         target_pos: Tuple[float, float, float],
+        center_x_override=None,
     ) -> bool:
         """
         Front-facing, centred door entry via a 6-state machine:
@@ -2027,6 +2028,14 @@ class NavigationController:
             inner_half_gap = 0.245   # assume kitchen-width gap as fallback
             print(f"{LOG_PREFIX} [DETECT_DOOR] Unknown door '{door_id}' â€” "
                   f"using approach_pos as frame centre")
+
+        # Optional caller override of the lateral-centring X. The living door uses
+        # this to aim at the usable opening centre (clear of the open leaf) instead
+        # of the geometric post midpoint. When None (every other caller/door) the
+        # behaviour is unchanged.
+        if center_x_override is not None:
+            print(f"{LOG_PREFIX} [DETECT_DOOR] centre-X override {frame_cx:.3f} -> {center_x_override:.3f}")
+            frame_cx = center_x_override
 
         # Door normal: unit vector pointing from hallway INTO the room.
         # North-wall doors (wall_y=0.88): normal = +Y, heading = Ï€/2 = 90Â°

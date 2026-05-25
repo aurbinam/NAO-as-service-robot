@@ -68,3 +68,7 @@ htmlcov/
 *.orig
 .swp
 .swo
+
+# Local companion config (secrets)
+data/companion_config.json
+data/spotify_tokens.json

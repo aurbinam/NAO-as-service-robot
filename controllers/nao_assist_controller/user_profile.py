@@ -45,7 +45,8 @@ class UserProfile:
         name: str = "",
         confirmed: bool = False,
         created_at: Optional[str] = None,
-        updated_at: Optional[str] = None
+        updated_at: Optional[str] = None,
+        memory: Optional[dict] = None
     ):
         self.user_id = user_id
         self.name = name
@@ -53,6 +54,7 @@ class UserProfile:
         now = datetime.now().isoformat()
         self.created_at = created_at or now
         self.updated_at = updated_at or now
+        self.memory = memory or {}
     
     def to_dict(self) -> dict:
         """Convert profile to dictionary for JSON serialization."""
@@ -61,7 +63,8 @@ class UserProfile:
             "name": self.name,
             "confirmed": self.confirmed,
             "created_at": self.created_at,
-            "updated_at": self.updated_at
+            "updated_at": self.updated_at,
+            "memory": self.memory
         }
     
     @classmethod
@@ -72,7 +75,8 @@ class UserProfile:
             name=data.get("name", ""),
             confirmed=data.get("confirmed", False),
             created_at=data.get("created_at"),
-            updated_at=data.get("updated_at")
+            updated_at=data.get("updated_at"),
+            memory=data.get("memory", {})
         )
     
     def update_name(self, name: str, confirmed: bool = True) -> None:
