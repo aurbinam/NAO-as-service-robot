@@ -15,22 +15,20 @@ All positions are in world XY coordinates (Z-up, metres).
 import math
 from typing import Optional, Tuple, Dict
 
-# ---------------------------------------------------------------------------
 # Door frame geometry — must match _STATIC_WALLS / _DOOR_OPENINGS in
 # DEF node translations in My project.wbt.
 # Each entry: (frame_cx, frame_cy, wall_y, inner_half_gap_m)
-#   frame_cx/cy       — world position of the door frame centre DEF node
-#   wall_y            — Y coordinate of the dividing wall the door sits in
-#   inner_half_gap_m  — half of the physical opening between post inner faces
-# ---------------------------------------------------------------------------
+# frame_cx/cy — world position of the door frame centre DEF node
+# wall_y — Y coordinate of the dividing wall the door sits in
+# inner_half_gap_m — half of the physical opening between post inner faces
 _DOOR_FRAME_DATA: Dict[str, Tuple[float, float, float, float]] = {
-    "door_hall_living":   (-2.36,  0.88,  0.88, 0.265),  # posts: x=-2.63, x=-2.09 → gap 0.54m
-    "door_hall_kitchen":  ( 1.84,  0.88,  0.88, 0.245),  # posts: x=1.57,  x=2.11  → gap 0.49m
+    "door_hall_living":   (-2.36,  0.88,  0.88, 0.265),  # posts: x=-2.63, x=-2.09 gap 0.54m
+    "door_hall_kitchen":  ( 1.84,  0.88,  0.88, 0.245),  # posts: x=1.57, x=2.11 gap 0.49m
     "door_hall_bedroom":  (-2.36, -1.52, -1.52, 0.265),  # same geometry as living
     "door_hall_bathroom": ( 1.84, -1.52, -1.52, 0.245),  # same geometry as kitchen
 }
 
-# NAO body half-width (shoulder width ~0.30m → half = 0.15m)
+# NAO body half-width (shoulder width ~0.30m half = 0.15m)
 NAO_BODY_HALF_WIDTH_M = 0.15
 
 # Suppress sonar when NAO centre is within this radius of any door frame centre.
@@ -38,13 +36,13 @@ NAO_BODY_HALF_WIDTH_M = 0.15
 FRAME_SUPPRESS_RADIUS_M = 0.65
 
 # Through-door offset: crossing waypoint placed this far past the frame centre
-# in the room direction.  Must satisfy two constraints simultaneously:
-#   offset < sonar_suppress_dist (0.70m)  → sonar OFF at the frame
-#   offset > through_door_arrive_m        → NAO physically enters the room
+# in the room direction. Must satisfy two constraints simultaneously:
+# offset < sonar_suppress_dist (0.70m) sonar OFF at the frame
+# offset > through_door_arrive_m NAO physically enters the room
 THROUGH_DOOR_OFFSET_M = 0.55
 
 # NAO considers itself "arrived" at the crossing waypoint when within this
-# distance of it.  Must be < THROUGH_DOOR_OFFSET_M so the robot ends up
+# distance of it. Must be < THROUGH_DOOR_OFFSET_M so the robot ends up
 # (THROUGH_DOOR_OFFSET_M - THROUGH_DOOR_ARRIVE_M) = 0.30m inside the room.
 THROUGH_DOOR_ARRIVE_M = 0.25
 
@@ -78,9 +76,7 @@ class DoorwayDetector:
     def __init__(self, robot=None):
         self._robot = robot
 
-    # ------------------------------------------------------------------
     # Proximity queries (real-time sonar suppression)
-    # ------------------------------------------------------------------
 
     def nearest_door_frame(
         self, x: float, y: float
@@ -110,9 +106,7 @@ class DoorwayDetector:
         entry = _DOOR_FRAME_DATA.get(door_id)
         return (entry[0], entry[1]) if entry is not None else None
 
-    # ------------------------------------------------------------------
     # Traversability
-    # ------------------------------------------------------------------
 
     def is_passable(self, door_id: str) -> bool:
         """True if the opening is wide enough for NAO (>=5 cm clearance each side)."""
@@ -133,9 +127,7 @@ class DoorwayDetector:
         # (was (entry[3] - 0.025) * 2 — double-subtracted post half-width)
         return entry[3] * 2.0
 
-    # ------------------------------------------------------------------
     # Door state via Supervisor
-    # ------------------------------------------------------------------
 
     def is_door_open(self, door_id: str) -> bool:
         """
@@ -158,9 +150,7 @@ class DoorwayDetector:
         except Exception:
             return True
 
-    # ------------------------------------------------------------------
     # Crossing waypoint
-    # ------------------------------------------------------------------
 
     def get_through_waypoint(
         self,
@@ -193,15 +183,11 @@ class DoorwayDetector:
             0.0,
         )
 
-    # ------------------------------------------------------------------
     # Alignment helpers
-    # ------------------------------------------------------------------
 
-    # ------------------------------------------------------------------
     # Geometric helpers: door centre + posts derived from _DOOR_FRAME_DATA.
     # Use these instead of "frame DEF translation" so callers don't conflate
     # a particular DEF placement with the actual geometric centre.
-    # ------------------------------------------------------------------
 
     def door_center(self, door_id: str) -> Optional[Tuple[float, float]]:
         """Geometric midpoint of the two posts (world XY, metres)."""

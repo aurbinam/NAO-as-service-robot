@@ -16,9 +16,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# =============================================================================
 # PATHS
-# =============================================================================
 HOUSE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = HOUSE_DIR / "house_config.json"
 
@@ -329,9 +327,7 @@ class HouseConfig:
         """
         return list(self._target_positions.keys())
     
-    # =========================================================================
     # DOOR METHODS (Iteration 3)
-    # =========================================================================
     
     def find_door_by_label(self, label: str) -> Optional[Dict]:
         """

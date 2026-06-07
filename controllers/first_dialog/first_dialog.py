@@ -26,9 +26,7 @@ import select
 import os
 os.environ['WEBOTS_WARNINGS'] = 'disable'
 
-# =============================================================================
 # CONFIGURATION - CHANGE THIS TO SELECT CONNECTION MODE
-# =============================================================================
 CONNECTION_MODE = "TCP"  # Options: "RECEIVER" or "TCP"
 TCP_HOST = "127.0.0.1"
 TCP_PORT = 5005
@@ -50,9 +48,7 @@ _tcp_client = None
 _tcp_buffer = ""
 _initialized = False
 
-# =============================================================================
 # INITIALIZATION
-# =============================================================================
 def _init_module(robot, timestep):
     """
     Initialize module state with provided robot and timestep.
@@ -163,9 +159,7 @@ def say(text: str) -> bool:
     return _step_seconds(wait_time)
 
 
-# =============================================================================
 # RECEIVER MESSAGES
-# =============================================================================
 def _read_receiver_messages():
     """
     Drain all pending messages from the Receiver.
@@ -190,9 +184,7 @@ def _read_receiver_messages():
     return messages
 
 
-# =============================================================================
 # TCP MESSAGES
-# =============================================================================
 def _read_tcp_messages():
     """
     Non-blocking read from TCP socket.
@@ -249,9 +241,7 @@ def _read_tcp_messages():
     return messages
 
 
-# =============================================================================
 # NAME PARSING
-# =============================================================================
 def parse_name_from_message(msg):
     """
     Parse a name from message formats:
@@ -281,9 +271,7 @@ def parse_name_from_message(msg):
     return None
 
 
-# =============================================================================
 # UNIFIED MESSAGE READING
-# =============================================================================
 def _read_messages():
     if CONNECTION_MODE == "RECEIVER":
         return _read_receiver_messages()
@@ -292,9 +280,7 @@ def _read_messages():
     return []
 
 
-# =============================================================================
 # MAIN API: get_user_name()
-# =============================================================================
 def get_user_name(robot, timestep):
     """
     Run the complete greeting flow and return the captured user name.
@@ -376,9 +362,7 @@ def _cleanup_tcp():
     _initialized = False  # Allow re-initialization if needed
 
 
-# =============================================================================
 # STANDALONE MODE (when run directly as controller)
-# =============================================================================
 # This block only runs when first_dialog.py is the actual Webots controller,
 # NOT when imported as a module by nao_main_controller.
 def _run_standalone():

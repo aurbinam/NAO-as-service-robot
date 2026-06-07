@@ -28,6 +28,8 @@ import select
 import threading
 import time
 import re
+import signal
+import atexit
 from pathlib import Path
 
 
@@ -56,16 +58,12 @@ from intelligence.executor import Executor
 from assistive_tasks import AssistiveStateMachine, AssistiveState
 from companion_brain import CompanionBrain
 
-# =============================================================================
 # PROJECT PATHS
-# =============================================================================
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROFILE_PATH = PROJECT_ROOT / "data" / "user_profile.json"
 
 
-# =============================================================================
 # HELPER FUNCTIONS
-# =============================================================================
 # Reset command words (case-insensitive) - for TCP/voice reset
 RESET_COMMANDS = {"reset", "restart", "start over"}
 
@@ -317,9 +315,7 @@ class NAOAssistController:
         # Cleanup any existing TCP connection
         self._cleanup_tcp()
     
-    # =========================================================================
     # SPEECH
-    # =========================================================================
     def _estimate_speech_time(self, text: str) -> float:
         """Estimate speech duration to prevent overlap."""
         base = max(MIN_SPEECH_SECONDS, len(text) * SPEECH_SECONDS_PER_CHAR)
@@ -338,6 +334,9 @@ class NAOAssistController:
     def say(self, text: str) -> bool:
         """Make NAO speak and wait appropriately."""
         print(f'{LOG_PREFIX} NAO: "{text}"')
+
+        if self._companion:
+            self._companion.pause_music_for_speech()
         
         if self._speaker:
             try:
@@ -349,11 +348,14 @@ class NAOAssistController:
                 print(f"{LOG_PREFIX} Speaker error: {e}")
         
         wait_time = self._estimate_speech_time(text)
-        return self._step_seconds(wait_time)
+        spoke = self._step_seconds(wait_time)
+
+        if self._companion:
+            self._companion.resume_music_after_speech()
+
+        return spoke
     
-    # =========================================================================
     # TCP SERVER
-    # =========================================================================
     def _init_tcp_server(self):
         """Initialize TCP server for voice_listener.py communication."""
         try:
@@ -432,10 +434,12 @@ class NAOAssistController:
         except Exception:
             pass
         self._tcp_buffer = ""
+
+    def _stop_spotify(self) -> None:
+        if self._companion:
+            self._companion.stop_music()
     
-    # =========================================================================
     # NAME PARSING
-    # =========================================================================
     def _parse_name_from_message(self, msg: str) -> str:
         """
         Parse name from message formats:
@@ -461,9 +465,7 @@ class NAOAssistController:
         
         return None
     
-    # =========================================================================
     # TYPED INPUT FALLBACK
-    # =========================================================================
     def _input_thread_func(self):
         """Thread function for non-blocking console input."""
         while self._input_active:
@@ -531,9 +533,7 @@ class NAOAssistController:
         cmds, self._typed_commands = self._typed_commands, []
         return cmds
 
-    # =========================================================================
     # IDENTITY CAPTURE
-    # =========================================================================
     def _capture_identity(self) -> bool:
         """
         Capture user identity via TCP or typed fallback.
@@ -642,9 +642,7 @@ class NAOAssistController:
         self._companion = CompanionBrain(self.say, self._user_profile, save_profile)
         return True
     
-    # =========================================================================
     # MAIN RUN LOOP
-    # =========================================================================
     def run(self):
         """
         Main control loop.
@@ -778,6 +776,8 @@ class NAOAssistController:
                 messages = self._read_tcp_messages() + self._read_typed_commands()
                 for msg in messages:
                     print(f"{LOG_PREFIX} [READY] Received: {msg}")
+                    msg_lower = msg.strip().lower()
+                    msg_norm = re.sub(r"[^\w\s]", "", msg_lower).strip()
                     
                     # Check for reset command first
                     if is_reset_command(msg):
@@ -786,6 +786,19 @@ class NAOAssistController:
                         self.say("Let us start fresh. What is your name?")
                         reset_triggered = True
                         break
+
+                    # Manual stop music (safest for demos)
+                    if msg_norm in {"stop", "stop music", "pause music", "stop the music", "pause the music"}:
+                        if self._companion:
+                            stopped = self._companion.stop_music()
+                        else:
+                            stopped = False
+                        print(f"{LOG_PREFIX} [MUSIC] Stop command received -> stopped={stopped}")
+                        if stopped:
+                            self.say("All right. I will stop the music.")
+                        else:
+                            self.say("I could not stop the music just now.")
+                        continue
                     
                     # Try assistive tasks (Phase 1) first
                     if self._assistive_state_machine and self._assistive_state_machine.process_voice_input(msg):
@@ -849,6 +862,7 @@ class NAOAssistController:
                 # Simulation ended (robot.step returned -1)
                 self._stop_input_thread()
                 self._cleanup_tcp()
+                self._stop_spotify()
                 print(f"{LOG_PREFIX} Controller ended")
                 return
             
@@ -858,7 +872,20 @@ class NAOAssistController:
 def main():
     """Entry point."""
     controller = NAOAssistController()
-    controller.run()
+    def _shutdown_handler(signum=None, frame=None):
+        controller._stop_spotify()
+
+    atexit.register(controller._stop_spotify)
+    try:
+        signal.signal(signal.SIGINT, _shutdown_handler)
+        signal.signal(signal.SIGTERM, _shutdown_handler)
+    except Exception:
+        pass
+
+    try:
+        controller.run()
+    finally:
+        controller._stop_spotify()
 
 
 if __name__ == "__main__":

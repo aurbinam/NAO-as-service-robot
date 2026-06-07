@@ -18,19 +18,16 @@ from skills.nav.hierarchical_planner import TopologicalGraph
 LOG_PREFIX = "[PLANNER]"
 Action = Tuple[str, ...]
 
-# ---------------------------------------------------------------------------
 # Interaction precondition table.
-#
 # Maps each interaction action type -> list of navigation steps that MUST
-# precede it in the plan.  Adding a new interaction type here is all that
+# precede it in the plan. Adding a new interaction type here is all that
 # is required to make the planner respect its spatial prerequisites.
-# ---------------------------------------------------------------------------
 _INTERACTION_PRECONDITIONS: Dict[str, List[str]] = {
     "open_door": ["navigate_door_approach", "verify_safe_approach"],
     "close_door": ["navigate_door_approach", "verify_safe_approach"],
     # Future actions follow the same pattern:
     # "press_button": ["navigate_to_object", "verify_arrival"],
-    # "pick_object":  ["navigate_to_object", "verify_arrival"],
+    # "pick_object": ["navigate_to_object", "verify_arrival"],
 }
 
 
@@ -67,9 +64,7 @@ class TaskPlanner:
     def reset_safety_margin(self):
         self._safety_margin = 0.30
 
-    # ------------------------------------------------------------------ #
-    #  Public API                                                          #
-    # ------------------------------------------------------------------ #
+    # Public API
 
     def plan(self, intent: Dict[str, Any], current_xy: Optional[Tuple[float, float]] = None) -> List[Action]:
         kind = intent.get("intent")
@@ -104,9 +99,7 @@ class TaskPlanner:
                 errors.append(f"Unknown door: '{action[1]}'")
         return errors
 
-    # ------------------------------------------------------------------ #
-    #  Core planning: spatial preconditions enforced here, at plan time   #
-    # ------------------------------------------------------------------ #
+    # Core planning: spatial preconditions enforced here, at plan time
 
     def _plan_navigate(self, target_id: str, current_xy: Optional[Tuple[float, float]] = None) -> List[Action]:
         """
@@ -265,9 +258,7 @@ class TaskPlanner:
         actions.append((action_type, door_id))
         return actions
 
-    # ------------------------------------------------------------------ #
-    #  Precondition expansion                                              #
-    # ------------------------------------------------------------------ #
+    # Precondition expansion
 
     def _precondition_steps(
         self, interaction_type: str, target_id: str
@@ -286,9 +277,7 @@ class TaskPlanner:
             steps.append((step_type, target_id))
         return steps
 
-    # ------------------------------------------------------------------ #
-    #  Helpers                                                             #
-    # ------------------------------------------------------------------ #
+    # Helpers
 
     def _find_door_by_label(self, label: str):
         for door in self._house.get_all_doors():

@@ -20,9 +20,7 @@ Alternative: Put door hinges inside this Robot node's children.
 
 from controller import Robot
 
-# =============================================================================
 # CONFIGURATION
-# =============================================================================
 LOG_PREFIX = "[DOOR]"
 RECEIVER_NAME = "door_receiver"
 RECEIVER_CHANNEL = 1

@@ -112,9 +112,7 @@ import heapq
 
 LOG = "[HIERARCHICAL_PLANNER]"
 
-# ============================================================================
 # LAYER 1: TOPOLOGICAL GRAPH (Room-level routing)
-# ============================================================================
 
 class TopologicalGraph:
     """
@@ -235,9 +233,7 @@ class TopologicalGraph:
         return (min(xs) - 1.0, max(xs) + 1.0, min(ys) - 1.0, max(ys) + 1.0)
 
 
-# ============================================================================
 # LAYER 2: ROOM PATH PLANNER (Waypoint generation within rooms)
-# ============================================================================
 
 class RoomPathPlanner:
     """
@@ -280,7 +276,7 @@ class RoomPathPlanner:
             # Find closest entry point to current position
             entry = min(entry_points, key=lambda p: self._dist(current_pos, p))
             
-            # Within-room path: current → entry → center (if not last room)
+            # Within-room path: current entry center (if not last room)
             if i == 0 and self._dist(current_pos, entry) > self.MIN_WAYPOINT_SPACING:
                 waypoints.append(entry)
             
@@ -323,9 +319,7 @@ class RoomPathPlanner:
         return smoothed
 
 
-# ============================================================================
 # LAYER 3: HIERARCHICAL PLANNER (Top-level orchestrator)
-# ============================================================================
 
 class HierarchicalPlanner:
     """

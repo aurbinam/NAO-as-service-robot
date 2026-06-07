@@ -36,67 +36,49 @@ from .object_classifier import ObjectClassifier
 
 LOG = "[WP_CTRL]"
 
-# ---------------------------------------------------------------------------
 # FSM states
-# ---------------------------------------------------------------------------
 class _State(Enum):
     MOVING_FORWARD = auto()  # walking with curvature heading correction
     TURNING        = auto()  # post-turn cooldown (forward only, no new turns)
 
 
-# ---------------------------------------------------------------------------
 # Heading thresholds
-# ---------------------------------------------------------------------------
 LARGE_TURN_DEG      = 25.0   # enter ALIGNING / discrete turn above this
 SMALL_TURN_DEG      =  8.0   # ignore heading error below this (dead-band)
 LARGE_TURN_RAD      = math.radians(LARGE_TURN_DEG)
 SMALL_TURN_RAD      = math.radians(SMALL_TURN_DEG)
 
-# ---------------------------------------------------------------------------
 # Control gains
-# ---------------------------------------------------------------------------
 ROT_KP           = 1.5     # P-gain: heading error -> rotation command (ALIGNING)
 ROT_MAX          = 0.50    # max rotation command
 WALK_TURN_KP     = 0.6     # P-gain for curvature while walking (gentle)
 WALK_TURN_MAX    = 0.22    # max curvature command while walking
 BASE_FWD_CMD     = 0.50    # base forward velocity command
 
-# ---------------------------------------------------------------------------
 # Cooldown and timing
-# ---------------------------------------------------------------------------
 TURN_COOLDOWN_S  = 3.5     # must exceed TurnLeft40/TurnRight40 duration (2880ms)
 
-# ---------------------------------------------------------------------------
 # Cross-track
-# ---------------------------------------------------------------------------
 CROSS_TRACK_M        = 0.40  # threshold before cross-track correction fires (raised to avoid oscillatory corrections)
 CROSS_TRACK_ALIGN_DEG = 15.0  # only correct when heading error < this
 
-# ---------------------------------------------------------------------------
 # Sonar / velocity scaling
-# ---------------------------------------------------------------------------
 SLOWDOWN_THRESHOLD_M = 0.80
 MIN_SPEED_FACTOR     = 0.30
 
-# ---------------------------------------------------------------------------
 # Door zone / avoidance hysteresis
-# ---------------------------------------------------------------------------
 DOOR_ZONE_M   = 0.80
 ENTER_AVOID_M = 0.35
 EXIT_AVOID_M  = 0.55
 ARC_TURN_CMD  = 0.28
 ARC_FWD_CMD   = 0.12
 
-# ---------------------------------------------------------------------------
 # Waypoint arrival
-# ---------------------------------------------------------------------------
 WP_ARRIVE_M       = 0.60
 DOOR_PASS_DIST_M  = 0.30
 ARRIVE_DEFAULT_M  = 0.60
 
-# ---------------------------------------------------------------------------
 # Stuck detection
-# ---------------------------------------------------------------------------
 STUCK_TIMEOUT_S  = 3.5
 STUCK_PROGRESS_M = 0.08
 
@@ -127,9 +109,7 @@ class WaypointController:
         self._doors = door_centres or []
         self._detector = door_detector
 
-    # ------------------------------------------------------------------
     # Public API
-    # ------------------------------------------------------------------
 
     def execute(self,
                 waypoints:     List[Tuple[float, float]],
@@ -235,9 +215,7 @@ class WaypointController:
 
         return True
 
-    # ------------------------------------------------------------------
     # Cross-track error
-    # ------------------------------------------------------------------
 
     def _cross_track(self, pos, seg_start: Tuple[float, float],
                      seg_end: Tuple[float, float]) -> float:
@@ -255,9 +233,7 @@ class WaypointController:
         # Signed distance: positive = left of line direction
         return (abx * (py - ay) - aby * (px - ax)) / length
 
-    # ------------------------------------------------------------------
     # Door zone
-    # ------------------------------------------------------------------
 
     def _is_door_zone(self, wp: Tuple[float, float]) -> bool:
         # Prefer DoorwayDetector proximity check when available (uses
@@ -269,9 +245,7 @@ class WaypointController:
                 return True
         return False
 
-    # ------------------------------------------------------------------
     # Sonar -> world obstacle position
-    # ------------------------------------------------------------------
 
     def _sonar_to_world(self, pos, dist_m: float
                         ) -> Tuple[Optional[float], Optional[float]]:
@@ -280,9 +254,7 @@ class WaypointController:
             return None, None
         return pos[0] + dist_m * math.cos(h), pos[1] + dist_m * math.sin(h)
 
-    # ------------------------------------------------------------------
     # Stuck detection
-    # ------------------------------------------------------------------
 
     def _tick_stuck(self, pos, t_ref: float,
                     pos_ref) -> Tuple[float, tuple]:
@@ -299,17 +271,13 @@ class WaypointController:
                 self._nav.stop_walking()
                 raise StuckError(f"No progress ({d:.3f}m)")
 
-    # ------------------------------------------------------------------
     # Webots step
-    # ------------------------------------------------------------------
 
     def _step(self):
         self._nav._step()
 
 
-# ---------------------------------------------------------------------------
 # Utilities
-# ---------------------------------------------------------------------------
 
 def _dist2d(a: tuple, b: tuple) -> float:
     return math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2)

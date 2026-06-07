@@ -34,16 +34,12 @@ from motion_loader import (
     try_load_standup_motions,
     try_load_all_motions,
 )
-# =============================================================================
 # CONSTANTS
-# =============================================================================
 LOG_PREFIX = "[GO_TO_TARGET]"
 FALL_LOG_PREFIX = "[FALL]"
 RECOVERY_LOG_PREFIX = "[RECOVERY]"
 
-# =============================================================================
 # VELOCITY-BASED LOCOMOTION TUNING
-# =============================================================================
 ROT_KP = 1.6                    # P gain for in-place heading alignment
 ROT_MAX = 0.5                   # Max rotational command magnitude
 ROT_TIMEOUT_S = 25.0            # Max time for a rotation phase
@@ -72,14 +68,25 @@ WALK_ALIGN_TOLERANCE_RAD = math.radians(20.0)  # rotate_to_heading exit toleranc
 WALK_CROSS_TRACK_LIMIT_M = 0.25         # max lateral deviation from planned line before heading correction
 WALK_OVERSHOOT_MARGIN_M = 0.02          # monotonic distance tolerance (metres)
 WALK_MAX_CORRECTIONS = 6                # oscillation detection limit
+# While crossing a door frame (target_class == door) NAO must NEVER rotate in
+# place: the scripted motion-file turn swings the body into a post and topples
+# it. Below this drift we push straight through (gait self-corrects on the
+# opening centre line); at/above it we abort so the caller backs out and
+# re-aligns OUTSIDE the frame.
+DOOR_CROSS_ABORT_DEG = 50.0
+# In-frame heading nudge: a SHORT partial turn burst (~a few degrees, the same
+# primitive AVOIDING uses safely) gives steering authority to track the opening
+# centre line without the full scripted turn that topples NAO. Pure forward-only
+# left NAO unable to correct gait drift and it veered into the open leaf.
+DOOR_CROSS_STEER_STEPS = 8
 
 # Human-safe approach thresholds
 EMERGENCY_STOP_M = 0.30          # hard stop: stop motion immediately
 CAUTION_DISTANCE = 0.60          # slow zone: shorter bursts
 HUMAN_SAFE_ARRIVE_M = 0.70       # default arrive dist for person targets
 HUMAN_SLOW_ZONE_M = 1.50         # cautious approach begins here
-BURST_STEPS_NORMAL = 7           # ~0.22s per burst at 32ms
-BURST_STEPS_CAUTION = 6          # ~0.10s per burst in caution zone
+BURST_STEPS_NORMAL = 7           # 0.22s per burst at 32ms
+BURST_STEPS_CAUTION = 6          # 0.10s per burst in caution zone
 SAFE_CLEAR_DISTANCE = 0.40       # exit AVOIDING when max sonar exceeds this (hallway width ~2.4m)
 AVOIDANCE_TURN_STEPS = 18        # partial turn â‰ˆ 8Â° (18/89 Ã— 39Â° at 32ms/step)
 AVOIDANCE_FWD_STEPS = 4          # short forward burst â‰ˆ 0.13s during arc escape
@@ -88,9 +95,7 @@ CORRECTION_TURN_STEPS = 23       # partial turn â‰ˆ 10Â° for heading corre
 HEADING_DEADLOCK_MIN_DEG = 8.0   # minimum yaw change expected per rotate_to_heading call
 HEADING_DEADLOCK_MAX_FAILS = 3   # escalate to RECOVERY after this many deadlocked corrections
 
-# =============================================================================
 # TARGET CLASS â€” context-aware sonar policy
-# =============================================================================
 TARGET_CLASS_ROOM      = "room"       # navigate to room: suppress sonar near door frame
 TARGET_CLASS_DOOR      = "door"       # door-frame waypoint: same suppress as ROOM
 TARGET_CLASS_FURNITURE = "furniture"  # task object (sofa/table): allow close approach
@@ -127,9 +132,7 @@ MAX_STUCK_LEVEL = 4              # abort if stuck escalation exceeds this level
 # Caller tolerances tighter than this cause overshoot oscillation.
 MOTION_FILE_MIN_TURN_TOLERANCE_RAD = math.radians(20.0)
 
-# =============================================================================
 # HYBRID CONTROLLER (closed-loop heading-coupled translation control)
-# =============================================================================
 # Design: short forward bursts + partial turn bursts in a single feedback loop
 # instead of bang-bang ALIGN/WALK. Forward speed *scaled by alignment*:
 # robot does not commit forward motion while badly off-heading. In-place
@@ -147,9 +150,7 @@ HYB_FWD_STEPS_DOOR     = 3      # door crossing: tightest feedback loop
 HYB_SLOW_RADIUS_M      = 0.80   # taper forward bursts within this radius
 HYB_GOAL_OSC_GUARD     = 12     # max no-progress iters before abort
 
-# =============================================================================
 # FALL DETECTION THRESHOLDS
-# =============================================================================
 # Z-height based detection (NAO standing height is ~0.33m at hip)
 FALL_Z_THRESHOLD = 0.22          # Below this Z = definitely fallen
 FALL_Z_WARNING = 0.28            # Warning zone - robot may be falling
@@ -160,21 +161,17 @@ FALL_TILT_THRESHOLD = 0.6        # up.z < 0.6 = body tilted > ~53 degrees
 FALL_TILT_WARNING = 0.75         # Warning threshold
 
 # Roll/pitch thresholds (in radians)
-FALL_PITCH_THRESHOLD = 0.9       # ~52 degrees
-FALL_ROLL_THRESHOLD = 0.9        # ~52 degrees
+FALL_PITCH_THRESHOLD = 0.9       # 52 degrees
+FALL_ROLL_THRESHOLD = 0.9        # 52 degrees
 
-# =============================================================================
 # CALIBRATION STATE (module-level, persists across NavigationController instances)
-# =============================================================================
 # These are set by run_full_calibration() and used by get_current_heading()
 _calibration_done = False
 _forward_axis = "y"       # NAO local Y axis points forward in Webots (local Z is UP)
 _forward_sign = 1         # +1 or -1
 _turns_swapped = False    # True if TurnLeft/TurnRight motions are swapped
 
-# =============================================================================
 # RECOVERY STATE (module-level, prevents motion stacking during recovery)
-# =============================================================================
 _recovery_in_progress = False    # True while executing stand-up recovery
 _standup_motions_loaded = False  # True after attempting to load stand-up motions
 _motion_standup_front = None     # Stand up from front fall
@@ -197,7 +194,7 @@ def _apply_nao_defaults():
     """
     global _calibration_done, _forward_axis, _forward_sign, _turns_swapped
     if not _calibration_done:
-        # NOTE: For this NAO model + motion-file backend, forward motion aligns with local X.
+        # For this NAO model + motion-file backend, forward motion aligns with local X.
         _forward_axis = "x"
         _forward_sign = 1
         _turns_swapped = False
@@ -350,7 +347,7 @@ class NavigationController:
 
         # Apply NAO-specific calibration defaults on first use so navigation
         # does not execute a destructive forward+turn calibration motion before
-        # going to the commanded target.  The auto-calibration path is still
+        # going to the commanded target. The auto-calibration path is still
         # available by calling run_full_calibration() explicitly if needed.
         _apply_nao_defaults()
     
@@ -796,7 +793,7 @@ class NavigationController:
         self._recovery_manager.start_movement()
         start_time = self.robot.getTime()
 
-        # --- Motion-file backend: discrete turn cycles ---
+        # Motion-file backend: discrete turn cycles
         if self._walk_cmd == "motion_file":
             _prev_error_abs = None
             _no_progress_count = 0
@@ -855,7 +852,7 @@ class NavigationController:
                     print(f"{LOG_PREFIX} Turn motion failed - aborting rotation")
                     return False
 
-        # --- Continuous velocity backends (moveToward / move / joint_gait) ---
+        # Continuous velocity backends (moveToward / move / joint_gait)
         loop_count = 0
 
         while True:
@@ -920,7 +917,7 @@ class NavigationController:
         self._recovery_manager.start_movement()
         start_time = self.robot.getTime()
 
-        # --- Motion-file backend: discrete forward/turn cycles ---
+        # Motion-file backend: discrete forward/turn cycles
         if self._walk_cmd == "motion_file":
             start_pos_raw = self.get_current_position()
             if start_pos_raw is None:
@@ -935,6 +932,10 @@ class NavigationController:
 
             _sup_dist  = _SONAR_SUPPRESS_DIST.get(target_class, 1.20)
             _emerg_thr = _EMERG_THRESH_BY_CLASS.get(target_class, EMERGENCY_STOP_M)
+            # Door crossing: NAO is between the posts. Any scripted in-place turn
+            # here strikes the frame and topples it, so the WALKING state pushes
+            # straight through instead of re-aligning (see DOOR_CROSS_ABORT_DEG).
+            _door_cross = (target_class == TARGET_CLASS_DOOR)
 
             STATE_ALIGNING  = "ALIGNING"
             STATE_WALKING   = "WALKING"
@@ -992,7 +993,7 @@ class NavigationController:
                         _avoid_cycle_count = 0
                         continue
 
-                # â”€â”€ RECOVERY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ #
+                # â”€â”€ RECOVERY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 if state == STATE_RECOVERY:
                     left  = self._obstacle_detector.left_clearance()
                     right = self._obstacle_detector.right_clearance()
@@ -1025,7 +1026,7 @@ class NavigationController:
                     state = STATE_ALIGNING
                     continue
 
-                # â”€â”€ AVOIDING â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ #
+                # â”€â”€ AVOIDING â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 elif state == STATE_AVOIDING:
                     left  = self._obstacle_detector.left_clearance()
                     right = self._obstacle_detector.right_clearance()
@@ -1069,7 +1070,7 @@ class NavigationController:
                         _fr = self._reactive_forward_burst(burst_steps=AVOIDANCE_FWD_STEPS)
                         if _fr == "SIM_END": return False
 
-                # â”€â”€ ALIGNING: rotate to face target â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ #
+                # â”€â”€ ALIGNING: rotate to face target â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 elif state == STATE_ALIGNING:
                     if abs(heading_error) < ALIGN_TOLERANCE:
                         _correction_count = 0
@@ -1098,7 +1099,7 @@ class NavigationController:
                     state = STATE_WALKING
                     continue
 
-                # â”€â”€ WALKING: step forward, re-align when heading drifts â”€â”€ #
+                # â”€â”€ WALKING: step forward, re-align when heading drifts â”€â”€
                 elif state == STATE_WALKING:
                     # Determine effective rotate threshold (tighter near doors/narrow passages)
                     if _is_narrow_passage and distance < 1.0:
@@ -1116,6 +1117,26 @@ class NavigationController:
                         _eff_rotate_deg = 30.0
 
                     if abs(heading_error) > math.radians(_eff_rotate_deg):
+                        # Inside a door frame: never rotate in place (topples NAO).
+                        # The through waypoint sits on the opening centre line, so a
+                        # moderate drift self-corrects with a forward burst. A gross
+                        # error means NAO is pointed wrong — abort and let the caller
+                        # back out and re-align OUTSIDE the frame.
+                        if _door_cross:
+                            if abs(heading_error) >= math.radians(DOOR_CROSS_ABORT_DEG):
+                                print(f"{LOG_PREFIX} Door crossing: gross drift "
+                                      f"{math.degrees(heading_error):.1f}deg â€” abort (no in-frame turn)")
+                                return False
+                            # Push straight through — NO in-frame turn of any kind
+                            # (even a short turn burst can topple NAO between the
+                            # posts). The through waypoint is on the opening centre
+                            # line; forward-only is the proven no-fall crossing.
+                            print(f"{LOG_PREFIX} Door crossing: drift "
+                                  f"{math.degrees(heading_error):.1f}deg held â€” forward burst (no in-frame turn)")
+                            _fr = self._reactive_forward_burst(burst_steps=BURST_STEPS_NORMAL)
+                            if _fr == "SIM_END":
+                                return False
+                            continue
                         _correction_count += 1
                         if _correction_count > MAX_CORRECTIONS:
                             print(f"{LOG_PREFIX} Oscillation ({_correction_count} heading corrections) â€” aborting")
@@ -1135,8 +1156,10 @@ class NavigationController:
                             # burst, not another alignment turn. Alignment turn
                             # just adds lateral drift when we are already pointed
                             # at the target. Push harder forward instead.
-                            if abs(heading_error) < math.radians(5.0):
-                                print(f"{LOG_PREFIX} No progress but heading good ({math.degrees(heading_error):.1f}deg) - bigger forward burst")
+                            # In a door frame, force forward (never the scripted
+                            # turn below — it strikes the frame).
+                            if _door_cross or abs(heading_error) < math.radians(5.0):
+                                print(f"{LOG_PREFIX} No progress ({'door crossing' if _door_cross else 'heading good'}, {math.degrees(heading_error):.1f}deg) - bigger forward burst")
                                 _no_progress_count = 0
                                 _fr = self._reactive_forward_burst(burst_steps=BURST_STEPS_NORMAL)
                                 if _fr == "SIM_END":
@@ -1174,7 +1197,7 @@ class NavigationController:
                     _correction_count = 0
                     _prev_distance = distance
 
-        # --- Continuous velocity backends ---
+        # Continuous velocity backends
         loop_count = 0
 
         while True:
@@ -1275,9 +1298,7 @@ class NavigationController:
             print(f"{LOG_PREFIX} ERROR getting position: {e}")
             return None
     
-    # =========================================================================
     # FALL DETECTION METHODS
-    # =========================================================================
     
     def get_body_up_vector(self) -> Optional[Tuple[float, float, float]]:
         """
@@ -1594,7 +1615,7 @@ class NavigationController:
             return {}
         
         candidates = {}
-        # Z-up world: horizontal plane is XY.  Row 0 = world-X, row 1 = world-Y component.
+        # Z-up world: horizontal plane is XY. Row 0 = world-X, row 1 = world-Y component.
         for axis, (fx_idx, fy_idx) in [("x", (0, 3)), ("y", (1, 4)), ("z", (2, 5))]:
             for sign_name, sign in [("+", 1), ("-", -1)]:
                 fx = o[fx_idx] * sign
@@ -1786,7 +1807,7 @@ class NavigationController:
         pos_before, yaw_before = self._log_pose(f"BEFORE {label}")
         
         try:
-            # CRITICAL: Stop and reset motion to ensure it plays from beginning
+            # Stop and reset motion to ensure it plays from beginning
             # This fixes the issue where repeated calls don't replay the motion
             motion.stop()
 
@@ -1818,7 +1839,7 @@ class NavigationController:
             
             print(f"{LOG_PREFIX} Playing '{label}' (expected duration: {expected_duration:.2f}s)...")
             
-            # CRITICAL: run motion for its full declared duration.
+            # run motion for its full declared duration.
             # Some setups report isOver() early; duration-based stepping avoids
             # premature termination (e.g., 2.84s motion ending in ~0.26s).
             while (self.robot.getTime() - start_sim_time) < expected_duration:
@@ -1969,9 +1990,7 @@ class NavigationController:
         return self.walk_to_target(target_pos, arrive_dist=arrive_dist,
                                    target_class=target_class)
 
-    # =========================================================================
     # DOOR CROSSING â€” 6-state alignment + entry controller
-    # =========================================================================
 
     def execute_door_crossing(
         self,
@@ -2010,15 +2029,15 @@ class NavigationController:
         # because motion_file discrete turns (~39Â°) cannot achieve finer precision.
         # Using 8Â° here would make VALIDATE always fail â†’ wasted retries â†’ misaligned entry.
         ALIGN_ANGLE_THRESHOLD_RAD = MOTION_FILE_MIN_TURN_TOLERANCE_RAD   # 20Â°
-        LATERAL_THRESHOLD_M       = 0.12   # m  â€” max lateral offset from door centre
-        SAFETY_MARGIN_M           = 0.05   # m  â€” clearance each side beyond NAO half-width
+        LATERAL_THRESHOLD_M       = 0.12   # m â€” max lateral offset from door centre
+        SAFETY_MARGIN_M           = 0.05   # m â€” clearance each side beyond NAO half-width
         MAX_ALIGN_RETRIES         = 3
-        APPROACH_DIST_M           = 0.70   # m  â€” perpendicular standoff from frame wall
+        APPROACH_DIST_M           = 0.70   # m â€” perpendicular standoff from frame wall
         # arrive_distance for the centering step must be < LATERAL_THRESHOLD_M
         # so NAO actually moves close enough to be within threshold.
-        CENTER_ARRIVE_M           = 0.08   # m  â€” was 0.15 (too large; NAO "arrived" before centering)
+        CENTER_ARRIVE_M           = 0.08   # m â€” was 0.15 (too large; NAO "arrived" before centering)
 
-        # â”€â”€ STATE: DETECT_DOOR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ #
+        # â”€â”€ STATE: DETECT_DOOR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         frame_entry = _DOOR_FRAME_DATA.get(door_id)
         if frame_entry is not None:
             frame_cx, frame_cy, wall_y, inner_half_gap = frame_entry
@@ -2047,8 +2066,8 @@ class NavigationController:
         normal_y      = 1.0 if is_north_wall else -1.0
 
         # Traversability check:
-        #   available_width = inner_half_gap * 2  (gap between post inner faces)
-        #   required_width  = NAO_width + 2 * safety_margin
+        # available_width = inner_half_gap * 2 (gap between post inner faces)
+        # required_width = NAO_width + 2 * safety_margin
         available_width = inner_half_gap * 2.0
         required_width  = NAO_BODY_HALF_WIDTH_M * 2.0 + 2.0 * SAFETY_MARGIN_M
         traversable     = available_width > required_width
@@ -2067,7 +2086,7 @@ class NavigationController:
         while align_attempt < MAX_ALIGN_RETRIES:
             align_attempt += 1
 
-            # â”€â”€ STATE: ESTIMATE_POSE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ #
+            # â”€â”€ STATE: ESTIMATE_POSE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             current_pos     = self.get_current_position()
             current_heading = self.get_current_heading()
             if current_pos is None or current_heading is None:
@@ -2092,11 +2111,11 @@ class NavigationController:
                   f"perp_dist={perp_dist:.3f}m  "
                   f"sonar_clr={sonar_clr:.3f}m")
 
-            # â”€â”€ STATE: ALIGN_TO_DOOR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ #
+            # â”€â”€ STATE: ALIGN_TO_DOOR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
             # Phase A â€” Lateral centering.
             # Navigate to the canonical perpendicular approach point on the door
-            # centre axis.  arrive_distance=CENTER_ARRIVE_M must be smaller than
+            # centre axis. arrive_distance=CENTER_ARRIVE_M must be smaller than
             # LATERAL_THRESHOLD_M so the arrival check doesn't short-circuit
             # before NAO actually reaches the centred position.
             if abs(lateral_offset) > LATERAL_THRESHOLD_M:
@@ -2114,9 +2133,13 @@ class NavigationController:
                       f"lat_offset={lateral_offset:+.3f}m > threshold={LATERAL_THRESHOLD_M}m  "
                       f"target=({perp_approach[0]:.3f},{perp_approach[1]:.3f})  "
                       f"dist={dist_to_center:.3f}m  arrive={CENTER_ARRIVE_M}m")
+                # Hall-side centering standoff — NOT between the posts. Use ROOM
+                # class so the walker may TURN to aim at the centring point. (DOOR
+                # class forbids in-frame turns; applied here it leaves NAO unable
+                # to re-aim and it freezes short of the centring point.)
                 _navigate_to_position(self, perp_approach,
                                       arrive_distance=CENTER_ARRIVE_M,
-                                      target_class=TARGET_CLASS_DOOR)
+                                      target_class=TARGET_CLASS_ROOM)
                 # Re-read position after centering
                 _centered_pos = self.get_current_position()
                 if _centered_pos is not None:
@@ -2147,7 +2170,7 @@ class NavigationController:
                           f"heading={math.degrees(_h_after):.1f}deg  "
                           f"err={math.degrees(_err_after):.1f}deg")
 
-            # â”€â”€ STATE: VALIDATE_ALIGNMENT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ #
+            # â”€â”€ STATE: VALIDATE_ALIGNMENT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             current_pos     = self.get_current_position()
             current_heading = self.get_current_heading()
             if current_pos is None or current_heading is None:
@@ -2170,9 +2193,18 @@ class NavigationController:
         if align_attempt >= MAX_ALIGN_RETRIES and not aligned:
             print(f"{LOG_PREFIX} [VALIDATE] Max retries â€” best effort (lat={lat_err:.3f}m head={math.degrees(head_err):.1f}deg)")
 
-        # â”€â”€ STATE: ENTER_DOOR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ #
-        through_pos = self._doorway_detector.get_through_waypoint(
-            approach_pos, target_pos, offset_m=THROUGH_DOOR_OFFSET_M
+        # â”€â”€ STATE: ENTER_DOOR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # Through waypoint MUST lie on the door's crossing centre line and run
+        # straight along the door normal. frame_cx is already biased to the free
+        # opening (via center_x_override), so X stays clear of both posts and the
+        # open leaf. The old get_through_waypoint() aimed the point at the room
+        # target, which pulled X off-centre toward a post (e.g. bathroom 1.84 ->
+        # 1.887, into the east leaf), so the entry walk drifted into the frame and
+        # toppled. Keep X fixed; advance only along the normal.
+        through_pos = (
+            frame_cx,
+            wall_y + normal_y * THROUGH_DOOR_OFFSET_M,
+            0.0,
         )
         _left_clr  = self._obstacle_detector.left_clearance()
         _right_clr = self._obstacle_detector.right_clearance()
@@ -2191,18 +2223,30 @@ class NavigationController:
                                         target_class=TARGET_CLASS_DOOR)
 
         _cp2 = self.get_current_position()
+        # If the walker bailed on drift but NAO is already physically past the
+        # wall plane into the room, the crossing succeeded. Counting this as a
+        # failure triggers a back-up retry that re-wedges NAO against the open
+        # leaf (an infinite emergency/avoid loop at the frame).
+        if not crossed and _cp2 is not None:
+            past_plane = normal_y * (_cp2[1] - wall_y)   # >0 = into the room
+            if past_plane > THROUGH_DOOR_ARRIVE_M:
+                print(f"{LOG_PREFIX} [ENTER_DOOR] walker bailed but NAO is "
+                      f"{past_plane:.2f}m past the wall plane -> treat as crossed")
+                crossed = True
         print(f"{LOG_PREFIX} [ENTER_DOOR] result={'SUCCESS' if crossed else 'FAIL'}  "
               f"final_pos=({(_cp2[0] if _cp2 else 0):.3f},{(_cp2[1] if _cp2 else 0):.3f})")
 
         if crossed:
             return True
 
-        # â”€â”€ STATE: RECOVERY_IF_COLLISION_RISK â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ #
+        # â”€â”€ STATE: RECOVERY_IF_COLLISION_RISK â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         print(f"{LOG_PREFIX} [RECOVERY] Crossing failed â€” backing up and re-aligning")
         current_pos = self.get_current_position()
         if current_pos is not None:
+            # Back up ONTO the door centre line (frame_cx), not the drifted X —
+            # keeping the drifted X re-wedges NAO against the open leaf.
             backup_pos = (
-                current_pos[0],
+                frame_cx,
                 current_pos[1] - normal_y * 0.35,
                 0.0,
             )
@@ -2223,9 +2267,7 @@ class NavigationController:
                                      arrive_distance=THROUGH_DOOR_ARRIVE_M,
                                      target_class=TARGET_CLASS_DOOR)
 
-    # =========================================================================
     # FALL RECOVERY METHODS
-    # =========================================================================
     
     def stop_all_motions(self):
         """
@@ -2341,7 +2383,7 @@ class NavigationController:
                     if self.robot.step(self.timestep) == -1:
                         return False
 
-                # IMPORTANT: bypass the recovery guard so we verify the real pose
+                # bypass the recovery guard so we verify the real pose
                 if not self.is_fallen(verbose=False, ignore_recovery_flag=True):
                     pos = self.get_current_position()
                     height = pos[2] if pos else 0  # Z-up: height is pos[2]
@@ -2490,7 +2532,7 @@ class NavigationController:
             print(f"{LOG_PREFIX} Forward axis calibration FAILED")
             return False
         
-        # Step 2: Calibrate turn directions  
+        # Step 2: Calibrate turn directions
         turns_ok = self.calibrate_turn_directions()
         if not turns_ok:
             print(f"{LOG_PREFIX} Turn direction calibration FAILED")
@@ -2715,9 +2757,7 @@ def go_to_target(target_id: str, robot, house_config: "HouseConfig",
     current_pos = nav.get_current_position()
     print(f"{LOG_PREFIX} NAO at ({current_pos[0]:.2f}, {current_pos[1]:.2f}, {current_pos[2]:.2f})")
     
-    # =========================================================================
     # ITERATION 3: Handle route_doors
-    # =========================================================================
     if handle_doors:
         route_doors = house_config.get_route_doors_for_target(resolved_id)
         if route_doors:
@@ -2812,9 +2852,7 @@ def go_to_target(target_id: str, robot, house_config: "HouseConfig",
     else:
         print(f"{LOG_PREFIX} No doors required for this route")
 
-    # =========================================================================
     # Navigate to final target
-    # =========================================================================
     print(f"\n{LOG_PREFIX} --- Navigating to final target: {label} ---")
     
     if say_func:
@@ -2941,9 +2979,7 @@ def get_calibration_info() -> dict:
     }
 
 
-# =============================================================================
 # MODULE-LEVEL FALL DETECTION/RECOVERY FUNCTIONS
-# =============================================================================
 
 def is_recovery_in_progress() -> bool:
     """Check if fall recovery is currently in progress."""

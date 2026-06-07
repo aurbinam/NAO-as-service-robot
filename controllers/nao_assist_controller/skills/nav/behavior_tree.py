@@ -36,9 +36,7 @@ class BTNode:
         pass
 
 
-# ---------------------------------------------------------------------------
 # Composite nodes
-# ---------------------------------------------------------------------------
 
 class Sequence(BTNode):
     """
@@ -95,9 +93,7 @@ class Selector(BTNode):
             c.reset()
 
 
-# ---------------------------------------------------------------------------
 # Leaf nodes
-# ---------------------------------------------------------------------------
 
 class Condition(BTNode):
     """Stateless predicate. SUCCESS if fn() is True, FAILURE otherwise."""
@@ -126,9 +122,7 @@ class Action(BTNode):
         return self._fn()
 
 
-# ---------------------------------------------------------------------------
 # Decorator nodes
-# ---------------------------------------------------------------------------
 
 class Inverter(BTNode):
     """Flips SUCCESS <-> FAILURE; passes RUNNING through."""

@@ -21,7 +21,7 @@ class FallRecoveryManager:
     """Manages command ramping and stability state for joint_gait backend."""
     
     # Configuration constants
-    RAMP_DURATION_SEC = 2.5  # Time to ramp from 0 → 100% command
+    RAMP_DURATION_SEC = 2.5  # Time to ramp from 0 100% command
     STABILITY_SETTLING_SEC = 1.0  # Time after fall before allowing new movements
     
     def __init__(self):

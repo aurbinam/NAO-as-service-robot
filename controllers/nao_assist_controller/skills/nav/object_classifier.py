@@ -67,9 +67,7 @@ class ObjectClassifier:
             t["id"]: t["def"] for t in house_config.targets
         }
 
-    # ------------------------------------------------------------------
     # Classification
-    # ------------------------------------------------------------------
 
     def classify_def(self, def_name: str) -> ObjectType:
         """Classify a raw Webots DEF node name."""
@@ -98,9 +96,7 @@ class ObjectClassifier:
             "furniture": ObjectType.INTERACTABLE,
         }.get(node_type_str, ObjectType.SOLID_OBSTACLE)
 
-    # ------------------------------------------------------------------
     # Policy derivation
-    # ------------------------------------------------------------------
 
     def get_policy(self, obj_type: ObjectType, is_goal: bool) -> BehaviorPolicy:
         """

@@ -40,9 +40,7 @@ LOCATION_TIMEOUT_S = 30.0
 MAX_LOCATION_RETRIES = 2
 
 
-# ==========================================================================
 # STATES
-# ==========================================================================
 
 class AssistiveState(Enum):
     IDLE = "idle"
@@ -56,9 +54,7 @@ class AssistiveState(Enum):
     NAVIGATING_TO_USER_LEGACY = "navigating_to_user_legacy"
 
 
-# ==========================================================================
 # OBJECT-LOCATION MAPPING
-# ==========================================================================
 
 OBJECT_LOCATIONS: Dict[str, str] = {
     "water": "kitchen",
@@ -70,12 +66,10 @@ OBJECT_LOCATIONS: Dict[str, str] = {
 }
 
 
-# ==========================================================================
 # VOICE COMMAND PARSING
-# ==========================================================================
 
 # escort_request: combined come + destination extracted from speech.
-# All of these → AWAITING_LOCATION (never immediate navigation).
+# All of these AWAITING_LOCATION (never immediate navigation).
 _ESCORT_REQUEST_RE = [
     re.compile(r"come\s+and\s+(?:take|escort|guide|lead|bring|get)\s+me\s+to\s+(?:the\s+)?(.+)"),
     re.compile(r"come\s+(?:take|get|escort|lead)\s+me\s+to\s+(?:the\s+)?(.+)"),
@@ -87,7 +81,7 @@ _ESCORT_REQUEST_RE = [
 ]
 
 # come_request: bare "come here/to me" — no destination.
-# Also → AWAITING_LOCATION. After arrival, task is complete (no escort phase).
+# Also AWAITING_LOCATION. After arrival, task is complete (no escort phase).
 _COME_REQUEST_PHRASES = ["come here", "come to me"]
 
 
@@ -156,9 +150,7 @@ def _parse_room_from_text(text: str, house_config) -> Optional[str]:
         return None
 
 
-# ==========================================================================
 # ASSISTIVE STATE MACHINE
-# ==========================================================================
 
 class AssistiveStateMachine:
     """
@@ -213,7 +205,7 @@ class AssistiveStateMachine:
             self._say("I did not hear you. I am here when you need me.")
             self._reset()
 
-    # ── Public entry point ─────────────────────────────────────────────── #
+    # Public entry point
 
     def process_voice_input(self, text: str) -> bool:
         """
@@ -225,11 +217,11 @@ class AssistiveStateMachine:
 
         Returns True if message was consumed (skip normal parse_command routing).
         """
-        # ── Dialogue mode ──────────────────────────────────────────────
+        # Dialogue mode
         if self.state == AssistiveState.AWAITING_LOCATION:
             return self._handle_location_reply(text)
 
-        # ── Normal command mode ────────────────────────────────────────
+        # Normal command mode
         intent, param = parse_voice_command(text)
 
         if intent is None:
@@ -258,7 +250,7 @@ class AssistiveStateMachine:
 
         return False
 
-    # ── AWAITING_LOCATION handler ──────────────────────────────────────── #
+    # AWAITING_LOCATION handler
 
     def _handle_location_reply(self, text: str) -> bool:
         """
@@ -297,7 +289,7 @@ class AssistiveStateMachine:
 
         return True  # always consume while in dialogue state
 
-    # ── Core escort execution ──────────────────────────────────────────── #
+    # Core escort execution
 
     def _execute_escort_from_room(self, user_room: str, destination: Optional[str]) -> None:
         """
@@ -311,7 +303,7 @@ class AssistiveStateMachine:
         """
         user_room_readable = user_room.replace("_", " ")
 
-        # ── Step 1: navigate to user's declared room ────────────────── #
+        # Step 1: navigate to user's declared room
         self._transition(AssistiveState.NAVIGATING_TO_USER)
         result = self.executor.execute(("navigate", user_room))
 
@@ -323,7 +315,7 @@ class AssistiveStateMachine:
         print(f"{LOG_PREFIX} Arrived at {user_room}")
         self._say("I am here with you.")
 
-        # ── Step 2: escort (skipped for bare come_request) ─────────── #
+        # Step 2: escort (skipped for bare come_request)
         if destination is None:
             self._transition(AssistiveState.COMPLETED)
             self._reset()
@@ -340,7 +332,7 @@ class AssistiveStateMachine:
             fallback = self.executor.execute(("navigate", destination))
             success = fallback.status == "success"
 
-        # ── Step 3: arrival ─────────────────────────────────────────── #
+        # Step 3: arrival
         self._transition(AssistiveState.COMPLETED)
         if success:
             self._say(f"We have arrived at the {dest_readable}.")
@@ -351,7 +343,7 @@ class AssistiveStateMachine:
 
         self._reset()
 
-    # ── Legacy: bring_object ───────────────────────────────────────────── #
+    # Legacy: bring_object
 
     def _execute_bring_object(self) -> None:
         object_name = self.current_object
@@ -388,7 +380,7 @@ class AssistiveStateMachine:
         self._transition(AssistiveState.COMPLETED)
         self._reset()
 
-    # ── Helpers ────────────────────────────────────────────────────────── #
+    # Helpers
 
     def _transition(self, new_state: AssistiveState) -> None:
         print(f"{LOG_PREFIX} State → {new_state.value.upper()}")

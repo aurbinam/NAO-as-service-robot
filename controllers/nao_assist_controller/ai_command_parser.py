@@ -34,9 +34,7 @@ import re
 import difflib
 from typing import List, Optional, Tuple
 
-# ---------------------------------------------------------------------------
 # Filler words stripped from raw voice input before pattern matching
-# ---------------------------------------------------------------------------
 _FILLER_PATTERNS = [
     r"\bplease\b",
     r"\bcan you\b",
@@ -48,9 +46,7 @@ _FILLER_PATTERNS = [
     r"\bhey nao\b",
 ]
 
-# ---------------------------------------------------------------------------
 # Pattern tables
-# ---------------------------------------------------------------------------
 LIST_PATTERNS = [
     "list places",
     "show places",
@@ -97,9 +93,7 @@ _COMMON_PLACES = {
 }
 
 
-# ---------------------------------------------------------------------------
 # Public helpers
-# ---------------------------------------------------------------------------
 
 def normalize_command_text(text: str) -> str:
     """Strip punctuation and filler words; lower-case and collapse whitespace."""
@@ -207,9 +201,7 @@ def _navigation_intent_score(text: str) -> float:
     return min(score, 1.0)
 
 
-# ---------------------------------------------------------------------------
 # Main classifier
-# ---------------------------------------------------------------------------
 
 def parse_command(
     text: str,

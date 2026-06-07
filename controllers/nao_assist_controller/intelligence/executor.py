@@ -45,13 +45,11 @@ class Executor:
     LIVING_DOOR_ID  = "door_hall_living"
     KITCHEN_DOOR_ID = "door_hall_kitchen"
     # Default geometry tuning for standard doorway crossing.
-    # =====================================================================
     # UNIVERSAL DOOR INTERACTION GEOMETRY
-    # =====================================================================
     # ONE model for every door (kitchen, bedroom, bathroom, living room).
     # No per-room tuning. Symbols:
-    #   approach point = door_centre - normal * APPROACH_OFFSET (hallway side)
-    #   entry point    = door_centre + normal * ENTRY_OFFSET    (room side)
+    # approach point = door_centre - normal * APPROACH_OFFSET (hallway side)
+    # entry point = door_centre + normal * ENTRY_OFFSET (room side)
     # where "normal" is the unit vector pointing from hallway into the room.
     DOOR_APPROACH_OFFSET_M = 0.30   # arm-reach (handle reach) - NAO stops this close to door plane
     DOOR_APPROACH_ARRIVE_M = 0.20   # stop within 20 cm of approach point
@@ -63,7 +61,7 @@ class Executor:
     DOOR_LINEUP_ARRIVE_M = DOOR_APPROACH_ARRIVE_M
     DOOR_ENTRY_LATERAL_M = 0.0
 
-    # --- Unified doorway crossing (entry == exit, every door) ---------------
+    # Unified doorway crossing (entry == exit, every door)
     # Stage in front of the FREE opening at a safe distance, align once, then
     # commit to a single straight pass. No per-room engines, no mid-frame turns.
     DOOR_STAGE_STANDOFF_M       = 0.55  # how far in front of the door to stage + align
@@ -582,15 +580,77 @@ class Executor:
                 nav = self._get_nav_controller()
                 target_pos = self._house.get_target_translation(target_id)
                 if target_pos is not None:
-                    # Living door enters off-centre (the open leaf occupies one
-                    # side), so aim it at the usable opening centre. LIVING ROOM
-                    # ONLY; every other door keeps the engine's geometric centring.
-                    center_x = None
+                    # Centre the crossing on the FREE opening (clear of the
+                    # swung-open leaf) for EVERY door, not just the living room.
+                    # execute_door_crossing now takes its through waypoint straight
+                    # along the normal from this X, so a leaf-biased centre keeps
+                    # NAO off both posts and the open leaf through the whole frame.
+                    center_x = free_cx
                     if door_id == self.LIVING_DOOR_ID:
                         center_x = free_cx + self.LIVING_ENTRY_CENTER_DX_M
                     print(f"{LOG_PREFIX} cross_doorway: ENTRY -> robust "
                           f"execute_door_crossing(target={target_id}"
                           f"{'' if center_x is None else f', centre_x={center_x:.2f}'})")
+                    # LIVING ENTRY ONLY. This door is reached via messy multi-room
+                    # routes, and the no-turn engine commit only crosses cleanly when
+                    # the coarse ±39deg motion-file align happens to leave NAO within
+                    # a few degrees of the normal. When a route leaves a ~25deg
+                    # residual (e.g. after a motion-file turn glitch in the hall), the
+                    # engine's hold-heading crossing drifts NAO into the east post and
+                    # it falls (observed: enter at +27deg, x drifts -2.41 -> -2.11).
+                    # Do NOT hand this door to the engine. Instead correct heading by
+                    # WALKING in the hall (closed-loop re-aim, before the frame) so NAO
+                    # reaches the mouth centred and straight, then push straight through
+                    # the posts with the no-turn class. The hall re-aim is what the
+                    # engine's hold-heading commit cannot do. Scoped to the living door;
+                    # bedroom/bathroom/kitchen entries still use the engine below.
+                    if door_id == self.LIVING_DOOR_ID:
+                        stage_y = cy - cross_dir * 0.70   # hall side, safe align distance
+                        mouth_y = cy - cross_dir * 0.30   # just outside the frame, still hall side
+                        thru_y  = cy + cross_dir * 0.55   # short push to inside the room
+                        print(f"{LOG_PREFIX} cross_doorway: LIVING ENTRY re-aim -> "
+                              f"stage=({center_x:.2f},{stage_y:.2f}) "
+                              f"mouth=({center_x:.2f},{mouth_y:.2f}) "
+                              f"thru=({center_x:.2f},{thru_y:.2f}) normal={math.degrees(normal):+.0f}deg")
+                        # 1) Stage + align well clear of the frame.
+                        self._navigate_to_point(center_x, stage_y, arrive_dist=0.10,
+                                                goal_id=door_id)
+                        if nav is not None:
+                            nav.rotate_to_heading(normal,
+                                                  tolerance_rad=math.radians(20.0),
+                                                  timeout_s=15.0)
+                        # 2) Closed-loop re-aim onto the free-opening centre line right
+                        # up to the mouth — corrections happen in the HALL, not in
+                        # the frame (default "room" class re-aims by walking).
+                        self._navigate_to_point(center_x, mouth_y, arrive_dist=0.10,
+                                                goal_id=door_id)
+                        # 3) Straight push through the posts, no in-frame turns.
+                        ok = self._navigate_to_point(center_x, thru_y, arrive_dist=0.25,
+                                                     goal_id=door_id, target_class="door")
+                        pos = self._robot_pos_2d()
+                        if pos is not None:
+                            print(f"{LOG_PREFIX} cross_doorway: LIVING ENTRY done "
+                                  f"pos=({pos[0]:.2f}, {pos[1]:.2f}) ok={ok}")
+                        return ExecutionResult("success", details={"door": door_id, "ok": ok})
+                    # BEDROOM ENTRY ONLY. NAO reaches this hinge-west door from the hall
+                    # facing roughly away from the south-wall normal, only ~0.30 m from
+                    # the frame. The engine skips its re-staging when lateral offset is
+                    # already small, so it would fire a coarse in-place turn THAT CLOSE
+                    # to the frame and drift into the west post. Pre-stage on the
+                    # free-opening centre line a safe distance out in the hall and align
+                    # to the normal THERE. Scoped to the bedroom; the bathroom and
+                    # kitchen entries that already work are untouched.
+                    if door_id == self.BEDROOM_DOOR_ID:
+                        stage_y = cy - cross_dir * 0.70   # hall side, clear of the frame
+                        print(f"{LOG_PREFIX} cross_doorway: BEDROOM ENTRY pre-stage -> "
+                              f"({center_x:.2f}, {stage_y:.2f}) then align to "
+                              f"{math.degrees(normal):+.0f}deg")
+                        self._navigate_to_point(center_x, stage_y, arrive_dist=0.12,
+                                                goal_id=door_id)
+                        if nav is not None:
+                            nav.rotate_to_heading(normal,
+                                                  tolerance_rad=math.radians(20.0),
+                                                  timeout_s=15.0)
                     ok = nav.execute_door_crossing(
                         door_id, (cx, cy, 0.0),
                         (target_pos[0], target_pos[1], 0.0),
@@ -613,9 +673,96 @@ class Executor:
             # pulling NAO onto the centre line and through - straight when aligned,
             # gently self-correcting otherwise. Same primitive that drove the
             # approach. Identical for entry and exit; free_cx keeps clear of the leaf.
+            # KITCHEN EXIT ONLY. NAO often reaches this exit badly aligned (after the
+            # turnaround from facing into the kitchen). The single commit walk below
+            # then lets forward-motion yaw drift build the heading error past 30deg
+            # right at the frame, firing an in-place ALIGNING turn that topples NAO.
+            # Pre-stage on the free-opening centre line a safe distance INSIDE the room
+            # and align to the door normal THERE (clear of the frame); the commit then
+            # starts aligned and crosses the frame before the error can rebuild.
+            if door_id == self.KITCHEN_DOOR_ID:
+                stage_y = cy - cross_dir * 0.40   # room side, clear of the frame for a safe turn
+                print(f"{LOG_PREFIX} cross_doorway: KITCHEN EXIT pre-stage -> "
+                      f"({free_cx:.2f}, {stage_y:.2f}) then align to {math.degrees(normal):+.0f}deg")
+                self._navigate_to_point(free_cx, stage_y, arrive_dist=0.10, goal_id=door_id)
+                nav = self._get_nav_controller()
+                if nav is not None:
+                    nav.rotate_to_heading(normal, tolerance_rad=math.radians(20.0), timeout_s=15.0)
+                # KITCHEN EXIT ONLY. This is the narrowest door (0.49 m gap) and its
+                # leaf opens INTO the kitchen at the east post — right at the exit
+                # mouth. The forward-only commit cannot turn between the posts (that
+                # swing topples NAO), so any heading residual left by the coarse
+                # motion-file align (~20deg floor) becomes lateral drift that grows
+                # with distance and walks NAO east into the open leaf ("crashes into
+                # the open door, gets stuck between the door"). Commit only far
+                # enough to clear the frame mouth, not the full ENTRY_OFFSET, so the
+                # blind straight pass through the gap is as short as possible; the
+                # planner's following navigate step (which re-aims) covers the rest.
+                k_through_y = cy + cross_dir * 0.55
+                print(f"{LOG_PREFIX} cross_doorway: KITCHEN EXIT short commit -> "
+                      f"({free_cx:.2f}, {k_through_y:.2f}) forward-only (no in-frame turn)")
+                ok = self._navigate_to_point(free_cx, k_through_y, arrive_dist=0.22,
+                                             goal_id=door_id, target_class="door")
+                pos = self._robot_pos_2d()
+                crossed = False
+                if pos is not None:
+                    crossed = (cross_dir * (pos[1] - cy)) >= self.DOOR_THROUGH_REACH_M
+                    print(f"{LOG_PREFIX} cross_doorway: KITCHEN EXIT done "
+                          f"pos=({pos[0]:.2f}, {pos[1]:.2f}) ok={ok} crossed={crossed}")
+                return ExecutionResult("success",
+                                       details={"door": door_id, "ok": ok, "crossed": crossed})
+
+            # LIVING EXIT ONLY. Unlike the bedroom/bathroom exits (whose leaves open
+            # AWAY into the room, behind NAO as it leaves), the living leaf opens
+            # north INTO the living room at the west post — right at the exit mouth.
+            # The plain commit walk below has no pre-alignment, so NAO leaves the
+            # room mis-aligned and the forward-only pass (no in-frame turns allowed)
+            # lets heading residual drift it into a post/leaf. Mirror the kitchen
+            # exit: stage on the free-opening centre line a safe distance INSIDE the
+            # room, align to the door normal there (clear of the frame), then commit
+            # only far enough to clear the mouth. Scoped to the living door; the
+            # bedroom and bathroom exits fall through to the generic walk untouched.
+            if door_id == self.LIVING_DOOR_ID:
+                stage_y = cy - cross_dir * 0.40   # room side, clear of the frame for a safe turn
+                print(f"{LOG_PREFIX} cross_doorway: LIVING EXIT pre-stage -> "
+                      f"({free_cx:.2f}, {stage_y:.2f}) then align to {math.degrees(normal):+.0f}deg")
+                self._navigate_to_point(free_cx, stage_y, arrive_dist=0.10, goal_id=door_id)
+                nav = self._get_nav_controller()
+                if nav is not None:
+                    nav.rotate_to_heading(normal, tolerance_rad=math.radians(20.0), timeout_s=15.0)
+                # rotate_to_heading only resolves the coarse motion-file turn and
+                # then "accepts and walk-corrects" a residual of up to ~27deg. The
+                # no-turn commit below cannot walk-correct, so that residual is held
+                # and NAO crosses at 30-40deg off, never makes southward progress and
+                # DEADLOCKS in the frame. Correct the heading by WALKING first: a
+                # closed-loop re-aim to the mouth (still north of the posts, where an
+                # in-place turn is clear of the frame) so the commit starts aligned.
+                mouth_y = cy - cross_dir * 0.25   # just inside the room, north of the posts
+                print(f"{LOG_PREFIX} cross_doorway: LIVING EXIT re-aim -> "
+                      f"({free_cx:.2f}, {mouth_y:.2f}) before the no-turn push")
+                self._navigate_to_point(free_cx, mouth_y, arrive_dist=0.10, goal_id=door_id)
+                l_through_y = cy + cross_dir * 0.55
+                print(f"{LOG_PREFIX} cross_doorway: LIVING EXIT short commit -> "
+                      f"({free_cx:.2f}, {l_through_y:.2f}) forward-only (no in-frame turn)")
+                ok = self._navigate_to_point(free_cx, l_through_y, arrive_dist=0.22,
+                                             goal_id=door_id, target_class="door")
+                pos = self._robot_pos_2d()
+                crossed = False
+                if pos is not None:
+                    crossed = (cross_dir * (pos[1] - cy)) >= self.DOOR_THROUGH_REACH_M
+                    print(f"{LOG_PREFIX} cross_doorway: LIVING EXIT done "
+                          f"pos=({pos[0]:.2f}, {pos[1]:.2f}) ok={ok} crossed={crossed}")
+                return ExecutionResult("success",
+                                       details={"door": door_id, "ok": ok, "crossed": crossed})
+
             print(f"{LOG_PREFIX} cross_doorway: commit -> closed-loop walk to "
                   f"free-opening point ({free_cx:.2f}, {through_y:.2f})")
-            ok = self._navigate_to_point(free_cx, through_y, arrive_dist=0.25, goal_id=door_id)
+            # Mark this as a DOOR crossing so the walker never fires an in-place
+            # scripted turn while NAO is between the posts (that swing strikes the
+            # frame/leaf and topples it — the kitchen-exit collision). It pushes
+            # straight through on the free-opening centre line instead.
+            ok = self._navigate_to_point(free_cx, through_y, arrive_dist=0.25,
+                                         goal_id=door_id, target_class="door")
 
             pos = self._robot_pos_2d()
             crossed = False
@@ -732,7 +879,8 @@ class Executor:
         except Exception as exc:
             return ExecutionResult("failed", reason=f"exception:{exc}")
 
-    def _navigate_to_point(self, x: float, y: float, arrive_dist: float = 0.10, goal_id: str | None = None) -> bool:
+    def _navigate_to_point(self, x: float, y: float, arrive_dist: float = 0.10, goal_id: str | None = None,
+                           target_class: str = "room") -> bool:
         """Navigate to (x, y) using direct walk_to_target FSM.
 
         The hierarchical planner inserted the corridor center as an intermediate
@@ -743,7 +891,8 @@ class Executor:
         try:
             ctrl = self._get_nav_controller()
             from skills.go_to_target import _navigate_to_position
-            return _navigate_to_position(ctrl, (x, y, 0.0), arrive_distance=arrive_dist)
+            return _navigate_to_position(ctrl, (x, y, 0.0), arrive_distance=arrive_dist,
+                                         target_class=target_class)
         except Exception as exc:
             print(f"{LOG_PREFIX} _navigate_to_point failed: {exc}")
             return False
@@ -996,10 +1145,10 @@ class Executor:
         NORTH_WALL_Y = 0.88
         SOUTH_WALL_Y = -1.52
         if abs(ay - NORTH_WALL_Y) < abs(ay - SOUTH_WALL_Y):
-            # Door is on north wall → approach from south (negative y direction)
+            # Door is on north wall approach from south (negative y direction)
             return (ax, ay - offset_m)
         else:
-            # Door is on south wall → approach from north (positive y direction)
+            # Door is on south wall approach from north (positive y direction)
             return (ax, ay + offset_m)
 
     def _hallway_backoff_point(self,

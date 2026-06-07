@@ -337,9 +337,7 @@ class NavAgent:
             # RUNNING - continue
             self.robot.step(32)
     
-    # ========================================================================
     # BEHAVIOR TREE CONDITIONS
-    # ========================================================================
     
     def _is_at_goal(self) -> BTStatus:
         """Check if robot is at goal location."""
@@ -367,9 +365,7 @@ class NavAgent:
         
         return BTStatus.FAILURE
     
-    # ========================================================================
     # BEHAVIOR TREE ACTIONS
-    # ========================================================================
     
     def _action_plan_path(self) -> BTStatus:
         """
@@ -451,9 +447,7 @@ class NavAgent:
         # Return to plan path action
         return self._action_plan_path()
     
-    # ========================================================================
     # PUBLIC QUERY API (for inspection)
-    # ========================================================================
     
     def get_planner(self):
         """
@@ -498,9 +492,7 @@ class NavAgent:
                 print(f"    [{i}] {wp}")
 
 
-# ============================================================================
 # Mock ObjectClassifier for backward compatibility
-# ============================================================================
 
 class _MockObjectClassifier:
     """Mock ObjectClassifier when house_config is not available."""
@@ -524,9 +516,7 @@ class _MockObjectClassifier:
         return "room"
 
 
-# ============================================================================
 # Adapter for backward compatibility with executor's grid planner API
-# ============================================================================
 
 class _PlannerAdapter:
     """Adapts HierarchicalPlanner to the old GridPlanner API (coordinate-based)."""
@@ -618,9 +608,7 @@ class _PlannerAdapter:
         return nearest_room if nearest_dist < 2.0 else None  # 2m max threshold
 
 
-# ============================================================================
 # Placeholder for BehaviorTree (reuse from before if available)
-# ============================================================================
 
 class BTStatus:
     """Behavior tree status enum."""

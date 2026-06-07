@@ -22,9 +22,7 @@ from typing import TYPE_CHECKING, Optional, Callable
 if TYPE_CHECKING:
     from house.house_loader import HouseConfig
 
-# =============================================================================
 # CONSTANTS
-# =============================================================================
 LOG_PREFIX = "[OPEN_DOOR]"
 
 

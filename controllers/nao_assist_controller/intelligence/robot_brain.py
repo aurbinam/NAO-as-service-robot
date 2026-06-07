@@ -71,9 +71,7 @@ class RobotBrain:
 
         print(f"{LOG_PREFIX} Initialised. Rooms: {rooms}. Doors: {doors}.")
 
-    # ------------------------------------------------------------------ #
-    #  Public entry point                                                  #
-    # ------------------------------------------------------------------ #
+    # Public entry point
 
     def handle_command(self, user_input: str) -> bool:
         """
@@ -84,7 +82,7 @@ class RobotBrain:
                -> EXECUTING/MONITORING loop
                -> COMPLETED or FAILED
         """
-        # -- Layer 1: interpret --
+        # Layer 1: interpret
         self._transition(RobotState.UNDERSTANDING)
         print(f"{LOG_PREFIX} Command: '{user_input}'")
 
@@ -94,7 +92,7 @@ class RobotBrain:
             self._say("I am not sure I understood. Could you say it again, please?")
             return self._fail("interpretation_failed")
 
-        # -- Layer 2: plan --
+        # Layer 2: plan
         self._transition(RobotState.PLANNING)
 
         try:
@@ -115,29 +113,27 @@ class RobotBrain:
         self._step = 0
         self._log_plan()
 
-        # -- Layers 3 + 4: execute with monitoring --
+        # Layers 3 + 4: execute with monitoring
         return self._run_plan()
 
     @property
     def state(self) -> RobotState:
         return self._state
 
-    # ------------------------------------------------------------------ #
-    #  Execution loop                                                      #
-    # ------------------------------------------------------------------ #
+    # Execution loop
 
     def _run_plan(self) -> bool:
         while self._step < len(self._plan):
             action = self._plan[self._step]
 
-            # -- Layer 3: execute --
+            # Layer 3: execute
             self._transition(RobotState.EXECUTING)
             self._say(self._describe(action))
 
             self._monitor.begin_attempt()
             result = self._executor.execute(action)
 
-            # -- Layer 4: monitor --
+            # Layer 4: monitor
             self._transition(RobotState.MONITORING)
 
             if result.is_success():
@@ -159,9 +155,7 @@ class RobotBrain:
         self._say("All done. Would you like anything else?")
         return True
 
-    # ------------------------------------------------------------------ #
-    #  Replanning                                                          #
-    # ------------------------------------------------------------------ #
+    # Replanning
 
     def _handle_failure(self, action: Tuple, result: ExecutionResult) -> bool:
         """
@@ -202,9 +196,7 @@ class RobotBrain:
               f"attempt {attempt}/{self._monitor.max_retries}")
         return True   # retry same step in _run_plan loop
 
-    # ------------------------------------------------------------------ #
-    #  Helpers                                                             #
-    # ------------------------------------------------------------------ #
+    # Helpers
 
     def _transition(self, new_state: RobotState):
         print(f"{LOG_PREFIX} {self._state.name} -> {new_state.name}")

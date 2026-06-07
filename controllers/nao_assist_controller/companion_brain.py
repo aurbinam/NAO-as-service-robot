@@ -45,19 +45,21 @@ class CompanionBrain:
         self._save_profile = save_profile_func
 
         self._client = None
-        self._init_client()
+        self._ai_provider = None
         self._last_ai_error_ts = 0.0
         self._ai_backoff_seconds = 60.0
+        self._init_client()
 
         self._last_interaction_ts = time.time()
         self._last_proactive_ts = 0.0
         self._next_checkin_ts = self._last_interaction_ts + 120.0
         self._last_topic = None
         self._continuous_mode = True
+        self._speech_ducked = False
+        self._force_music_stopped = False
+        self._pending_story_tone = None
 
-    # ------------------------------------------------------------------
     # Public API
-    # ------------------------------------------------------------------
 
     def handle_message(self, text: str) -> bool:
         """
@@ -107,6 +109,14 @@ class CompanionBrain:
             self._say(emo)
             return True
 
+        # Story follow-up
+        if self._pending_story_tone:
+            story = self._resolve_story_response(raw, lower)
+            if story:
+                self._pending_story_tone = None
+                self._say(story)
+                return True
+
         # Time
         if self._is_time_question(lower):
             now = datetime.now()
@@ -150,6 +160,10 @@ class CompanionBrain:
             return True
 
         if self._is_general_question(lower):
+            ai_reply = self._ai_reply(raw)
+            if ai_reply:
+                self._say(ai_reply)
+                return True
             self._say("I can help with simple questions, or we can just talk. What would you like?")
             return True
 
@@ -188,42 +202,102 @@ class CompanionBrain:
 
         return messages
 
+    def stop_music(self) -> bool:
+        """Best-effort stop for Spotify playback (used on shutdown)."""
+        self._force_music_stopped = True
+        self._speech_ducked = False
+        if self._spotify_pause():
+            return True
+        return not self._spotify_is_playing()
+
+    def pause_music_for_speech(self) -> None:
+        """Pause Spotify while NAO is speaking to avoid overlap."""
+        if self._force_music_stopped:
+            return
+        if self._spotify_is_playing():
+            if self._spotify_pause():
+                self._speech_ducked = True
+
+    def resume_music_after_speech(self) -> None:
+        """Resume Spotify after speech if we paused it."""
+        if self._force_music_stopped:
+            return
+        if self._speech_ducked:
+            if self._spotify_resume():
+                self._speech_ducked = False
+
     def _init_client(self) -> None:
-        try:
-            import anthropic
-
-            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-            if api_key:
-                self._client = anthropic.Anthropic(api_key=api_key)
-            else:
-                self._client = None
-        except ImportError:
+        api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            print("[COMPANION] GEMINI_API_KEY not set - basic question answering disabled.")
             self._client = None
+            self._ai_provider = None
+            return
+        try:
+            from google import genai
+            self._client = genai.Client(api_key=api_key)
+            self._ai_provider = "gemini"
+            print("[COMPANION] Gemini client initialised for basic questions.")
+        except ImportError:
+            print("[COMPANION] google-genai package not installed - basic question answering disabled.")
+            self._client = None
+            self._ai_provider = None
+        except Exception as exc:
+            print(f"[COMPANION] Gemini client could not start: {exc}")
+            self._client = None
+            self._ai_provider = None
 
-    def _ai_reply(self, user_text: str) -> Optional[str]:
-        if self._client is None:
+
+    def _gemini_text(self, user_text: str, max_words: int = 55) -> Optional[str]:
+        """Call Gemini and return a short spoken answer for NAO."""
+        if self._client is None or self._ai_provider != "gemini":
             return None
+
         if (time.time() - self._last_ai_error_ts) < self._ai_backoff_seconds:
             return None
 
         memory = self._format_memory()
         system_prompt = _COMPANION_SYSTEM_PROMPT.format(memory=memory)
+
+        prompt = (
+            f"{system_prompt}\n\n"
+            f"The user said: {user_text}\n\n"
+            f"Reply in no more than {max_words} words because NAO will speak it aloud. "
+            "If this is a basic factual question, give a simple direct answer. "
+            "If this is normal conversation, respond warmly and naturally. "
+            "Do not control movement, doors, navigation, or physical actions. "
+            "If the user asks for medical, legal, dangerous, or emergency advice, do not answer directly; "
+            "recommend contacting a trusted person or professional."
+        )
+
         try:
-            response = self._client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=256,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_text}],
+            response = self._client.models.generate_content(
+                model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+                contents=prompt,
             )
-            text = response.content[0].text.strip()
+
+            text = (getattr(response, "text", "") or "").strip()
             return text if text else None
-        except Exception:
+
+        except Exception as exc:
+            print(f"[COMPANION] Gemini call failed: {exc}")
             self._last_ai_error_ts = time.time()
             return None
 
-    # ------------------------------------------------------------------
+    def _ai_reply(self, user_text: str) -> Optional[str]:
+        return self._gemini_text(user_text, max_words=55)
+
+
+    def _ai_story(self, tone: str) -> Optional[str]:
+        tone_word = "cheerful" if tone == "cheerful" else "calm"
+        user_text = (
+            f"Tell a short {tone_word} story for an elderly grandpa. "
+            "Keep it 4 to 6 short sentences. "
+            "No medical advice. End with a gentle follow-up question."
+        )
+        return self._gemini_text(user_text, max_words=95)
+
     # Internal helpers
-    # ------------------------------------------------------------------
 
     def _get_name(self) -> Optional[str]:
         if self._profile is None:
@@ -382,7 +456,19 @@ class CompanionBrain:
         return "lonely" in lower
 
     def _is_general_question(self, lower: str) -> bool:
-        return lower.endswith("?")
+        # Speech recognition usually removes punctuation, so "what is a rainbow"
+        # should still be treated as a question even without a question mark.
+        question_starters = (
+            "what is", "what are", "what does", "what do",
+            "what its", "whats", "what's",
+            "who is", "who are",
+            "where is", "where are",
+            "when is", "when are",
+            "why is", "why do", "why does",
+            "how is", "how are", "how do", "how does", "how can",
+            "can you explain", "explain", "tell me about", "do you know",
+        )
+        return lower.endswith("?") or lower.startswith(question_starters)
 
     def _music_response(self, query: Optional[str] = None) -> str:
         played_msg = self._try_spotify_play(query=query)
@@ -401,9 +487,9 @@ class CompanionBrain:
 
     def _extract_music_query(self, raw: str, lower: str) -> Optional[str]:
         # Examples:
-        #   "play some music" -> None
-        #   "play 120 from bad bunny" -> "120 bad bunny"
-        #   "put some bad bunny" -> "bad bunny"
+        # "play some music" -> None
+        # "play 120 from bad bunny" -> "120 bad bunny"
+        # "put some bad bunny" -> "bad bunny"
         if "music" in lower and "play" in lower:
             return None
 
@@ -460,6 +546,7 @@ class CompanionBrain:
         token = get_spotify_access_token() or os.environ.get("SPOTIFY_ACCESS_TOKEN", "").strip()
         device_name = (config.get("device_name") or os.environ.get("SPOTIFY_DEVICE_NAME", "Living Room Speaker")).strip()
         default_uri = (config.get("default_uri") or os.environ.get("SPOTIFY_DEFAULT_URI", "")).strip()
+        debug_devices = os.environ.get("SPOTIFY_DEBUG_DEVICES", "").strip().lower() in ("1", "true", "yes")
 
         if not token:
             return "I am not connected to Spotify yet. Please run setup." 
@@ -475,6 +562,9 @@ class CompanionBrain:
                 return "I could not connect to Spotify yet."
 
             devices = dev_resp.json().get("devices", [])
+            if debug_devices:
+                device_list = ", ".join(d.get("name", "") for d in devices if d.get("name"))
+                print(f"[SPOTIFY] target='{device_name}' devices=[{device_list}]")
             device_id = None
             for dev in devices:
                 name = (dev.get("name") or "").lower()
@@ -483,7 +573,7 @@ class CompanionBrain:
                     break
 
             if not device_id:
-                return "I could not find the living room speaker on Spotify."
+                return f"I could not find the Spotify device '{device_name}'."
 
             play_url = "https://api.spotify.com/v1/me/player/play"
             if device_id:
@@ -515,8 +605,10 @@ class CompanionBrain:
                 return "I need Spotify Premium to start music."
             if play_resp.status_code == 401:
                 return "My Spotify connection expired. Please reconnect me."
+            self._force_music_stopped = False
             return "I could not start Spotify just now."
         except Exception:
+            self._force_music_stopped = False
             return "I could not reach Spotify right now."
 
     def _spotify_search_track(self, token: str, query: str) -> Optional[str]:
@@ -538,11 +630,86 @@ class CompanionBrain:
         except Exception:
             return None
 
+    def _spotify_pause(self) -> Optional[str]:
+        config = get_spotify_config()
+        token = get_spotify_access_token() or os.environ.get("SPOTIFY_ACCESS_TOKEN", "").strip()
+        device_name = (config.get("device_name") or os.environ.get("SPOTIFY_DEVICE_NAME", "Living Room Speaker")).strip()
+        debug_control = os.environ.get("SPOTIFY_DEBUG_CONTROL", "").strip().lower() in ("1", "true", "yes")
+
+        if not token:
+            return None
+
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            dev_resp = requests.get(
+                "https://api.spotify.com/v1/me/player/devices",
+                headers=headers,
+                timeout=5,
+            )
+            if dev_resp.status_code != 200:
+                return None
+
+            devices = dev_resp.json().get("devices", [])
+            device_id = None
+            for dev in devices:
+                name = (dev.get("name") or "").lower()
+                if name == device_name.lower():
+                    device_id = dev.get("id")
+                    break
+
+            pause_url = "https://api.spotify.com/v1/me/player/pause"
+            if device_id:
+                pause_url = f"{pause_url}?device_id={device_id}"
+                pause_resp = requests.put(pause_url, headers=headers, timeout=5)
+                if debug_control:
+                    print(f"[SPOTIFY] pause device='{device_name}' status={pause_resp.status_code}")
+                if pause_resp.status_code in (200, 204):
+                    return "ok"
+
+            pause_resp = requests.put(pause_url, headers=headers, timeout=5)
+            if debug_control:
+                print(f"[SPOTIFY] pause (no device) status={pause_resp.status_code}")
+            if pause_resp.status_code in (200, 204):
+                return "ok"
+            if debug_control:
+                playing = self._spotify_is_playing()
+                print(f"[SPOTIFY] pause check is_playing={playing}")
+            return None
+        except Exception:
+            return None
+
+    def _spotify_resume(self) -> Optional[str]:
+        token = get_spotify_access_token() or os.environ.get("SPOTIFY_ACCESS_TOKEN", "").strip()
+        if not token:
+            return None
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            play_resp = requests.put("https://api.spotify.com/v1/me/player/play", headers=headers, timeout=5)
+            if play_resp.status_code in (200, 204):
+                return "ok"
+            return None
+        except Exception:
+            return None
+
+    def _spotify_is_playing(self) -> bool:
+        token = get_spotify_access_token() or os.environ.get("SPOTIFY_ACCESS_TOKEN", "").strip()
+        if not token:
+            return False
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            resp = requests.get("https://api.spotify.com/v1/me/player", headers=headers, timeout=5)
+            if resp.status_code != 200:
+                return False
+            return bool(resp.json().get("is_playing"))
+        except Exception:
+            return False
+
     def _fallback_chat_response(self, lower: str) -> str:
         name = self._get_name()
         name_prefix = f"{name}, " if name else ""
 
         if "story" in lower:
+            self._pending_story_tone = "unknown"
             return (
                 f"{name_prefix}I can tell a short story. "
                 "Would you like something calm or something cheerful?"
@@ -571,6 +738,35 @@ class CompanionBrain:
             f"{name_prefix}We can talk about your day. How has it been?",
         ]
         return random.choice(prompts)
+
+    def _resolve_story_response(self, raw: str, lower: str) -> Optional[str]:
+        if "cheerful" in lower or "happy" in lower:
+            return self._ai_story("cheerful") or self._cheerful_story()
+        if "calm" in lower or "quiet" in lower or "soft" in lower:
+            return self._ai_story("calm") or self._calm_story()
+        if "story" in lower:
+            return self._ai_story("calm") or self._calm_story()
+        return None
+
+    def _cheerful_story(self) -> str:
+        name = self._get_name()
+        name_prefix = f"{name}, " if name else ""
+        return (
+            f"{name_prefix}Here is a cheerful one. "
+            "A little robot planted a tiny seed by the window. "
+            "Every day it said hello and gave it a sip of water. "
+            "Soon a bright flower popped up, and it smiled back."
+        )
+
+    def _calm_story(self) -> str:
+        name = self._get_name()
+        name_prefix = f"{name}, " if name else ""
+        return (
+            f"{name_prefix}Here is a calm one. "
+            "A soft breeze moved through the garden at dusk. "
+            "The trees whispered, and a small bird tucked in to rest. "
+            "Everything felt quiet and safe."
+        )
 
     def _proactive_prompt(self) -> Optional[str]:
         prompts = [

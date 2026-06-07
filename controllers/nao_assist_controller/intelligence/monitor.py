@@ -48,9 +48,7 @@ class ExecutionMonitor:
         self._retry_count = 0
         self._reset_attempt()
 
-    # ------------------------------------------------------------------ #
-    #  Public interface                                                    #
-    # ------------------------------------------------------------------ #
+    # Public interface
 
     def begin_attempt(self):
         """Call before each navigation attempt."""
@@ -106,9 +104,7 @@ class ExecutionMonitor:
     def describe(self, signal: MonitorSignal) -> str:
         return _SIGNAL_MESSAGES.get(signal, "An unexpected navigation issue occurred.")
 
-    # ------------------------------------------------------------------ #
-    #  Internal                                                            #
-    # ------------------------------------------------------------------ #
+    # Internal
 
     def _reset_attempt(self):
         self._distances: List[float] = []
