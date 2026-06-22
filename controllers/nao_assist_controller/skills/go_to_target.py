@@ -1884,6 +1884,26 @@ class NavigationController:
                           f"(pos_delta={pos_delta:.6f}m, yaw_delta={math.degrees(yaw_delta):.4f}deg)")
                     print(f"{LOG_PREFIX}   Possible causes: joint-name mismatch, collision, or "
                           f"physics issue. Navigation will continue.")
+
+                # TURN-SLIP SAFETY GUARD. An in-place turn that TRANSLATES far while
+                # barely rotating is the topple signature: the logs show turn_left/
+                # turn_right producing 0.3-0.5 m of travel with <15 deg of yaw in the
+                # cycle right before every door-frame fall (e.g. pos_delta=0.5067m,
+                # yaw_delta=12.6deg -> "Rotation interrupted: robot fell"). A clean
+                # pivot is ~0.01 m / ~39 deg, and a genuine walking turn keeps yaw
+                # high, so this only trips on the dangerous slip. Returning False makes
+                # rotate_to_heading abort ("Turn motion failed") and the crossing stop
+                # SAFELY instead of firing more turns into the frame until NAO falls.
+                _TURN_SLIP_ABORT_M     = 0.12   # translation that signals a slip
+                _TURN_SLIP_MIN_YAW_DEG = 15.0   # a real turn rotates more than this
+                if (label.startswith("turn")
+                        and pos_delta > _TURN_SLIP_ABORT_M
+                        and yaw_delta < math.radians(_TURN_SLIP_MIN_YAW_DEG)):
+                    print(f"{LOG_PREFIX} TURN SLIP ABORT: '{label}' translated "
+                          f"{pos_delta:.3f}m with only {math.degrees(yaw_delta):.1f}deg yaw "
+                          f"(limits: >{_TURN_SLIP_ABORT_M:.2f}m and <{_TURN_SLIP_MIN_YAW_DEG:.0f}deg) "
+                          f"- unstable in-place turn, aborting rotation to avoid a fall")
+                    return False
             else:
                 print(f"{LOG_PREFIX} WARNING: Could not validate pose change (pose unavailable)")
 
@@ -2029,13 +2049,19 @@ class NavigationController:
         # because motion_file discrete turns (~39Â°) cannot achieve finer precision.
         # Using 8Â° here would make VALIDATE always fail â†’ wasted retries â†’ misaligned entry.
         ALIGN_ANGLE_THRESHOLD_RAD = MOTION_FILE_MIN_TURN_TOLERANCE_RAD   # 20Â°
+        # Tightening this to 0.06 (last session) made centring fire for almost any
+        # arrival, and each centring walk churned the heading into 140-180 deg in-
+        # place turns at the frame -> falls (see logs). Reverted to 0.12: accept the
+        # arrival lateral offset instead of chasing sub-decimetre centring with
+        # turns. The TURN-SLIP guard in play_motion now aborts a crossing SAFELY if
+        # an in-place turn ever starts to topple, so a looser gate is acceptable.
         LATERAL_THRESHOLD_M       = 0.12   # m â€” max lateral offset from door centre
         SAFETY_MARGIN_M           = 0.05   # m â€” clearance each side beyond NAO half-width
-        MAX_ALIGN_RETRIES         = 3
+        MAX_ALIGN_RETRIES         = 1      # was 3; each retry re-centred and churned heading
         APPROACH_DIST_M           = 0.70   # m â€” perpendicular standoff from frame wall
         # arrive_distance for the centering step must be < LATERAL_THRESHOLD_M
         # so NAO actually moves close enough to be within threshold.
-        CENTER_ARRIVE_M           = 0.08   # m â€” was 0.15 (too large; NAO "arrived" before centering)
+        CENTER_ARRIVE_M           = 0.10   # m â€” must stay < LATERAL_THRESHOLD_M (0.12)
 
         # â”€â”€ STATE: DETECT_DOOR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         frame_entry = _DOOR_FRAME_DATA.get(door_id)
@@ -2201,9 +2227,30 @@ class NavigationController:
         # target, which pulled X off-centre toward a post (e.g. bathroom 1.84 ->
         # 1.887, into the east leaf), so the entry walk drifted into the frame and
         # toppled. Keep X fixed; advance only along the normal.
+        # Walk re-aim to the door MOUTH (hall side of the posts) on the crossing
+        # centre line BEFORE the blind commit. Phase B aligns in place, but the
+        # motion-file turn floor (~20 deg) means up to that much heading residual
+        # can survive. The ENTER walk below is DOOR class (forward-only, no
+        # steering), so any residual becomes pure lateral drift over the ~1.2 m to
+        # the through point and clips a post. A short ROOM-class walk to a point
+        # just OUTSIDE the frame derives a fresh heading FROM motion (the walker
+        # steers onto frame_cx), so the commit starts pointed straight down the
+        # normal. The mouth is hall-side, so the walker's turns here are clear of
+        # the frame. Keeps X on frame_cx (already free-opening biased).
+        mouth_pos = (frame_cx, wall_y - normal_y * 0.16, 0.0)
+        print(f"{LOG_PREFIX} [ENTER_DOOR] mouth re-aim -> "
+              f"({mouth_pos[0]:.3f},{mouth_pos[1]:.3f}) before blind commit")
+        _navigate_to_position(self, mouth_pos, arrive_distance=0.08,
+                              target_class=TARGET_CLASS_ROOM)
+
+        # Through point shortened from 0.55 to 0.48 past the wall so the blind
+        # DOOR-class portion (mouth -0.16 -> +0.48 = ~0.64 m) stays short enough
+        # that a small post-re-aim residual cannot drift NAO past the 0.095 m
+        # narrow-door margin before it clears the frame.
+        ENTER_THROUGH_OFFSET_M = 0.48
         through_pos = (
             frame_cx,
-            wall_y + normal_y * THROUGH_DOOR_OFFSET_M,
+            wall_y + normal_y * ENTER_THROUGH_OFFSET_M,
             0.0,
         )
         _left_clr  = self._obstacle_detector.left_clearance()

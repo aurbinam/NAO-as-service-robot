@@ -2,6 +2,7 @@
   "user_id": "user1",
   "name": "Adam",
   "confirmed": true,
-  "created_at": "2026-05-13T18:48:08.732527",
-  "updated_at": "2026-05-13T18:48:08.732735"
+  "created_at": "2026-06-08T02:15:59.461835",
+  "updated_at": "2026-06-08T02:15:59.461937",
+  "memory": {}
 }

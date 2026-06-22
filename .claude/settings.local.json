@@ -62,7 +62,9 @@
       "Bash(python -m py_compile skills/go_to_target.py intelligence/executor.py)",
       "Bash(find . -maxdepth 2 -iname \"*diagram*\")",
       "Bash(ls -la \"Diagrams\")",
-      "Bash(python -c \"import importlib.util,sys; spec=importlib.util.spec_from_file_location\\('df','dissertation_figures_FINAL.py'\\); m=importlib.util.module_from_spec\\(spec\\); spec.loader.exec_module\\(m\\); m.fig3_2\\(\\); print\\('OK regenerated'\\)\")"
+      "Bash(python -c \"import importlib.util,sys; spec=importlib.util.spec_from_file_location\\('df','dissertation_figures_FINAL.py'\\); m=importlib.util.module_from_spec\\(spec\\); spec.loader.exec_module\\(m\\); m.fig3_2\\(\\); print\\('OK regenerated'\\)\")",
+      "Bash(python _tidy.py)",
+      "Bash(python -m py_compile controllers/nao_assist_controller/intelligence/executor.py)"
     ]
   }
 }

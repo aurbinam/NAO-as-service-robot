@@ -28,7 +28,7 @@ ENV/
 env.bak/
 venv.bak/
 
-# IDEs and editors
+# IDEs and editors / local tooling
 .vscode/
 .idea/
 *.swp
@@ -53,7 +53,12 @@ venv.bak/
 # OS
 Thumbs.db
 .DS_Store
+desktop.ini
 *.log
+
+# Webots project state
+*.wbproj
+.*.wbproj
 
 # Jupyter Notebook
 .ipynb_checkpoints/
